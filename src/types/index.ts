@@ -86,32 +86,109 @@ export interface Plan {
   isActive: boolean;
 }
 
+export interface QuotationTemplateLine {
+  id: number;
+  productId: number;
+  productName: string;
+  productType?: string;
+  variantId?: number | null;
+  variantName?: string | null;
+  quantity: number;
+  unitPrice: number;
+  taxId?: number | null;
+  taxName?: string | null;
+  taxRate?: number;
+}
+
 export interface QuotationTemplate {
   id: number;
   name: string;
   planId?: number;
   planName?: string;
+  planInterval?: BillingInterval;
   validityDays: number;
   linesCount: number;
   notes?: string;
   isActive: boolean;
+  lines?: QuotationTemplateLine[];
 }
 
 export type SubscriptionStatus = 'draft' | 'quotation' | 'confirmed' | 'active' | 'paused' | 'closed';
+
+export interface SubscriptionLine {
+  id: number;
+  subscriptionId: number;
+  productId: number;
+  productName: string;
+  productType?: string;
+  variantId?: number | null;
+  variantName?: string | null;
+  description?: string;
+  quantity: number;
+  unitPrice: number;
+  taxId?: number | null;
+  taxName?: string | null;
+  taxRate: number;
+  taxAmount: number;
+  subtotalAmount: number;
+  totalAmount: number;
+}
+
+export interface SubscriptionHistoryEntry {
+  id: number;
+  subscriptionId: number;
+  fromStatus: SubscriptionStatus | null;
+  toStatus: SubscriptionStatus;
+  action: string;
+  actorUserId?: number | null;
+  actorName?: string | null;
+  actorRole?: string | null;
+  reason?: string | null;
+  metadata?: any;
+  createdAt: string;
+}
 
 export interface Subscription {
   id: number;
   subscriptionNumber: string;
   customerId: number;
   customerName: string;
-  planId: number;
+  customerEmail?: string;
+  customerPhone?: string;
+  companyName?: string;
+  planId?: number;
   planName: string;
+  templateId?: number | null;
+  templateName?: string | null;
   status: SubscriptionStatus;
   startDate: string;
-  expiryDate?: string;
-  nextBillingDate: string;
-  recurringAmount: number;
+  expiryDate?: string | null;
+  nextBillingDate?: string | null;
+  paymentTerms?: string;
+  billingInterval?: BillingInterval;
+  billingIntervalCount?: number;
+  subtotalAmount?: number;
+  taxAmount?: number;
+  discountAmount?: number;
+  totalRecurringAmount?: number;
+  recurringAmount: number; // Backwards compatible with demoData & OverviewPage
   autoRenew: boolean;
+  pausedAt?: string | null;
+  resumedAt?: string | null;
+  closedAt?: string | null;
+  cancellationReason?: string | null;
+  notes?: string | null;
+  createdByName?: string | null;
+  updatedByName?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+  planPolicy?: {
+    pauseAllowed: boolean;
+    earlyClosePolicy: EarlyClosePolicy;
+    renewalPolicy: RenewalPolicy;
+  } | null;
+  lines?: SubscriptionLine[];
+  history?: SubscriptionHistoryEntry[];
 }
 
 export type InvoiceStatus = 'draft' | 'confirmed' | 'paid' | 'cancelled';

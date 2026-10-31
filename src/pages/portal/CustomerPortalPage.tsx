@@ -11,12 +11,17 @@ import {
   LogOut,
   User,
   ArrowRight,
+  PauseCircle,
+  PlayCircle,
+  X,
 } from 'lucide-react';
 import { Card } from '../../components/common/Card';
 import { Button } from '../../components/common/Button';
 import { Badge } from '../../components/common/Badge';
 import { ErrorAlert } from '../../components/common/ErrorAlert';
+import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { useAuth } from '../../context/AuthContext';
+import { useSubscriptions, useSubscription, transitionSubscription } from '../../services/api';
 
 export const CustomerPortalPage: React.FC = () => {
   const { user, login, logout, isAuthenticated, isLoading } = useAuth();
@@ -25,6 +30,32 @@ export const CustomerPortalPage: React.FC = () => {
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+
+  // Customer Selected Subscription Detail Modal
+  const [selectedSubId, setSelectedSubId] = useState<number | null>(null);
+  const [actionPrompt, setActionPrompt] = useState<{
+    subId: number;
+    subNumber: string;
+    targetStatus: 'paused' | 'active';
+    title: string;
+  } | null>(null);
+  const [actionReason, setActionReason] = useState<string>('');
+  const [isSubmittingAction, setIsSubmittingAction] = useState<boolean>(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  // Subscriptions Query (strictly isolated by server session)
+  const {
+    subscriptions: customerSubs,
+    isLoading: isLoadingSubs,
+    refetch: refetchSubs,
+  } = useSubscriptions({
+    page: 1,
+    limit: 20,
+    status: 'all',
+  });
+
+  const { subscription: selectedSub, isLoading: isLoadingDetail, refetch: refetchDetail } =
+    useSubscription(selectedSubId);
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -42,6 +73,42 @@ export const CustomerPortalPage: React.FC = () => {
       setLoginError(err.message || 'Login failed.');
     } finally {
       setIsLoggingIn(false);
+    }
+  };
+
+  const handleCustomerTransition = async () => {
+    if (!actionPrompt) return;
+    setIsSubmittingAction(true);
+    setActionError(null);
+
+    try {
+      await transitionSubscription(actionPrompt.subId, actionPrompt.targetStatus, actionReason);
+      setActionPrompt(null);
+      refetchSubs();
+      if (selectedSubId === actionPrompt.subId) {
+        refetchDetail();
+      }
+    } catch (err: any) {
+      setActionError(err.message || 'Self-service action failed.');
+    } finally {
+      setIsSubmittingAction(false);
+    }
+  };
+
+  const getStatusBadge = (status: string) => {
+    switch (status) {
+      case 'active':
+        return <Badge variant="success">Active</Badge>;
+      case 'quotation':
+        return <Badge variant="warning">Quotation</Badge>;
+      case 'confirmed':
+        return <Badge variant="brand">Confirmed</Badge>;
+      case 'paused':
+        return <Badge variant="neutral">Paused</Badge>;
+      case 'closed':
+        return <Badge variant="danger">Closed</Badge>;
+      default:
+        return <Badge variant="neutral">{status}</Badge>;
     }
   };
 
@@ -121,7 +188,8 @@ export const CustomerPortalPage: React.FC = () => {
                       </Badge>
                     </div>
                     <p className="text-xs text-slate-500 mt-0.5">
-                      Account: <strong className="text-slate-700">{user.email}</strong> {user.customerId ? `(Customer #${user.customerId})` : ''}
+                      Account: <strong className="text-slate-700">{user.email}</strong>{' '}
+                      {user.customerId ? `(Customer #${user.customerId})` : ''}
                     </p>
                   </div>
                 </div>
@@ -137,20 +205,64 @@ export const CustomerPortalPage: React.FC = () => {
             </Card>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Subscriptions Card Shell */}
+              {/* Subscriptions Card Shell — Live Customer Agreements */}
               <Card
                 title="My Subscriptions"
                 description="View your active software licenses, plan cycles, and renewal dates."
               >
-                <div className="p-8 border-2 border-dashed border-slate-200 rounded-lg text-center bg-slate-50/50">
-                  <div className="w-10 h-10 rounded-full bg-white border border-slate-200 mx-auto flex items-center justify-center text-slate-400 mb-3 shadow-xs">
-                    <Repeat className="w-5 h-5 text-emerald-600" />
+                {isLoadingSubs ? (
+                  <div className="p-8 text-center">
+                    <LoadingSpinner label="Loading your subscriptions..." />
                   </div>
-                  <h4 className="text-sm font-semibold text-slate-800">Your Subscription Ledger</h4>
-                  <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1">
-                    Your authenticated account is verified. Live subscription records will display here as agreements are activated in Phase 6.
-                  </p>
-                </div>
+                ) : customerSubs && customerSubs.length > 0 ? (
+                  <div className="space-y-3">
+                    {customerSubs.map((sub) => (
+                      <div
+                        key={sub.id}
+                        onClick={() => setSelectedSubId(sub.id)}
+                        className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl hover:border-emerald-300 hover:shadow-xs transition-all cursor-pointer flex items-center justify-between text-xs"
+                      >
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <Repeat className="w-3.5 h-3.5 text-emerald-600" />
+                            <strong className="font-mono text-slate-900">{sub.subscriptionNumber}</strong>
+                            {getStatusBadge(sub.status)}
+                          </div>
+                          <div className="text-slate-600 font-medium">{sub.planName}</div>
+                          <div className="text-[11px] text-slate-400">
+                            Valid through: {sub.expiryDate || 'Continuous'}
+                          </div>
+                        </div>
+
+                        <div className="text-right space-y-1">
+                          <div className="font-mono font-bold text-slate-900 text-sm">
+                            ${(sub.totalRecurringAmount ?? sub.recurringAmount ?? 0).toFixed(2)}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedSubId(sub.id);
+                            }}
+                            className="text-emerald-700 font-semibold text-[11px] hover:underline"
+                          >
+                            Details →
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="p-8 border-2 border-dashed border-slate-200 rounded-lg text-center bg-slate-50/50">
+                    <div className="w-10 h-10 rounded-full bg-white border border-slate-200 mx-auto flex items-center justify-center text-slate-400 mb-3 shadow-xs">
+                      <Repeat className="w-5 h-5 text-emerald-600" />
+                    </div>
+                    <h4 className="text-sm font-semibold text-slate-800">No Subscriptions Active</h4>
+                    <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1">
+                      No active subscription agreements linked to your account yet. Contact our sales team to activate an agreement.
+                    </p>
+                  </div>
+                )}
               </Card>
 
               {/* Invoices Card Shell */}
@@ -174,7 +286,7 @@ export const CustomerPortalPage: React.FC = () => {
             <div className="p-4 bg-white rounded-xl border border-slate-200 text-xs text-slate-600 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Lock className="w-4 h-4 text-emerald-600" />
-                <span>Customer Self-Service Actions: Pause subscription, update contact details, print statements.</span>
+                <span>Customer Self-Service Actions: Pause subscription, inspect active software seats, review terms.</span>
               </div>
               <span className="font-semibold text-emerald-600">Strictly Isolated</span>
             </div>
@@ -284,6 +396,221 @@ export const CustomerPortalPage: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* ========================================================================= */}
+      {/* Customer Subscription Detail Modal                                        */}
+      {/* ========================================================================= */}
+      {selectedSubId && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-xl max-w-2xl w-full p-6 space-y-5 border border-slate-200 animate-in fade-in zoom-in-95 my-auto text-xs">
+            <div className="flex items-start justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center">
+                  <Repeat className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base font-bold text-slate-900">
+                      {selectedSub?.subscriptionNumber || 'Subscription Detail'}
+                    </h3>
+                    {selectedSub && getStatusBadge(selectedSub.status)}
+                  </div>
+                  <p className="text-slate-500 text-[11px]">Contract terms & active licenses</p>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setSelectedSubId(null)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {isLoadingDetail ? (
+              <div className="py-12 text-center">
+                <LoadingSpinner label="Loading subscription agreement..." />
+              </div>
+            ) : selectedSub ? (
+              <div className="space-y-4">
+                {/* Plan and Cycle Policy */}
+                <div className="grid grid-cols-2 gap-3 p-3 bg-slate-50 rounded-xl border border-slate-200">
+                  <div>
+                    <span className="text-slate-500">Plan Tier:</span>
+                    <div className="font-bold text-slate-900">{selectedSub.planName}</div>
+                  </div>
+                  <div>
+                    <span className="text-slate-500">Billing Interval:</span>
+                    <div className="font-semibold text-slate-800 capitalize">
+                      {selectedSub.billingInterval || 'Monthly'}
+                    </div>
+                  </div>
+                  <div>
+                    <span className="text-slate-500">Start Date:</span>
+                    <div className="font-medium text-slate-800">{selectedSub.startDate}</div>
+                  </div>
+                  <div>
+                    <span className="text-slate-500">Expiry / Renewal:</span>
+                    <div className="font-medium text-slate-800">{selectedSub.expiryDate || 'Continuous'}</div>
+                  </div>
+                </div>
+
+                {/* Line Items */}
+                <div>
+                  <div className="font-bold text-slate-900 mb-2">Licensed Products & Add-ons</div>
+                  <div className="border border-slate-200 rounded-xl overflow-hidden">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead>
+                        <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider">
+                          <th className="py-2 px-3">Item</th>
+                          <th className="py-2 px-3 text-center">Qty</th>
+                          <th className="py-2 px-3 text-right">Unit Price</th>
+                          <th className="py-2 px-3 text-right">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {selectedSub.lines?.map((line) => (
+                          <tr key={line.id}>
+                            <td className="py-2 px-3">
+                              <span className="font-semibold text-slate-800">{line.productName}</span>
+                              {line.variantName && (
+                                <div className="text-[11px] text-emerald-700">{line.variantName}</div>
+                              )}
+                            </td>
+                            <td className="py-2 px-3 text-center font-mono">{line.quantity}</td>
+                            <td className="py-2 px-3 text-right font-mono">${line.unitPrice.toFixed(2)}</td>
+                            <td className="py-2 px-3 text-right font-mono font-bold text-slate-900">
+                              ${line.totalAmount.toFixed(2)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot className="bg-slate-50 border-t border-slate-200">
+                        <tr>
+                          <td colSpan={3} className="py-2 px-3 text-right font-bold text-slate-900">
+                            Total Recurring Amount:
+                          </td>
+                          <td className="py-2 px-3 text-right font-mono font-bold text-emerald-700 text-sm">
+                            ${(selectedSub.totalRecurringAmount || selectedSub.recurringAmount || 0).toFixed(2)}
+                          </td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Permitted Self-Service Customer Actions */}
+                <div className="p-3 bg-emerald-50/70 border border-emerald-200 rounded-xl flex items-center justify-between">
+                  <div>
+                    <span className="font-bold text-emerald-950">Self-Service Actions</span>
+                    <p className="text-[11px] text-emerald-800 mt-0.5">
+                      {selectedSub.status === 'active'
+                        ? 'Pause subscription if taking temporary time off.'
+                        : selectedSub.status === 'paused'
+                        ? 'Resume service and re-enable active subscription.'
+                        : 'Contact Brightloop support for additional lifecycle assistance.'}
+                    </p>
+                  </div>
+
+                  {selectedSub.status === 'active' && selectedSub.planPolicy?.pauseAllowed !== false && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      icon={<PauseCircle className="w-3.5 h-3.5 text-amber-600" />}
+                      onClick={() =>
+                        setActionPrompt({
+                          subId: selectedSub.id,
+                          subNumber: selectedSub.subscriptionNumber,
+                          targetStatus: 'paused',
+                          title: `Pause Subscription ${selectedSub.subscriptionNumber}`,
+                        })
+                      }
+                    >
+                      Pause Subscription
+                    </Button>
+                  )}
+
+                  {selectedSub.status === 'paused' && (
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      icon={<PlayCircle className="w-3.5 h-3.5" />}
+                      className="bg-emerald-600 hover:bg-emerald-700"
+                      onClick={() =>
+                        setActionPrompt({
+                          subId: selectedSub.id,
+                          subNumber: selectedSub.subscriptionNumber,
+                          targetStatus: 'active',
+                          title: `Resume Subscription ${selectedSub.subscriptionNumber}`,
+                        })
+                      }
+                    >
+                      Resume Subscription
+                    </Button>
+                  )}
+                </div>
+              </div>
+            ) : null}
+
+            <div className="flex justify-end pt-2 border-t border-slate-100">
+              <Button variant="outline" size="sm" onClick={() => setSelectedSubId(null)}>
+                Close
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* Customer Action Prompt Dialog                                             */}
+      {/* ========================================================================= */}
+      {actionPrompt && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-sm w-full p-5 space-y-4 border border-slate-200 animate-in fade-in zoom-in-95">
+            <h3 className="text-base font-bold text-slate-900">{actionPrompt.title}</h3>
+            {actionError && <ErrorAlert message={actionError} onDismiss={() => setActionError(null)} />}
+
+            <p className="text-xs text-slate-500">
+              {actionPrompt.targetStatus === 'paused'
+                ? 'Your software license will be temporarily held. You can resume at any time.'
+                : 'Your software license will be reactivated immediately.'}
+            </p>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Reason / Note for Brightloop Support (Optional)
+              </label>
+              <textarea
+                value={actionReason}
+                onChange={(e) => setActionReason(e.target.value)}
+                placeholder="Reason for change..."
+                rows={2}
+                className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-300 rounded-lg focus:bg-white text-xs"
+              />
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setActionPrompt(null)}
+                disabled={isSubmittingAction}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                isLoading={isSubmittingAction}
+                onClick={handleCustomerTransition}
+                className="bg-emerald-600 hover:bg-emerald-700"
+              >
+                Confirm
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

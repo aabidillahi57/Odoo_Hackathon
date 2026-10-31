@@ -262,37 +262,55 @@ CREATE TABLE IF NOT EXISTS discount_usages (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- -----------------------------------------------------------------------------
--- 8. Subscriptions & Subscription Lines
+-- 8. Subscriptions, Sequences, Lines & Audit History
 -- Lifecycle: draft -> quotation -> confirmed -> active -> closed (or paused).
 -- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS subscription_sequences (
+    sequence_year INT PRIMARY KEY,
+    last_number INT NOT NULL DEFAULT 0,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS subscriptions (
     id INT AUTO_INCREMENT PRIMARY KEY,
     subscription_number VARCHAR(50) NOT NULL UNIQUE,
     customer_id INT NOT NULL,
-    plan_id INT NOT NULL,
+    plan_id INT NULL,
     template_id INT NULL,
     status ENUM('draft', 'quotation', 'confirmed', 'active', 'paused', 'closed') NOT NULL DEFAULT 'draft',
     start_date DATE NOT NULL,
     expiry_date DATE NULL,
-    next_billing_date DATE NOT NULL,
+    next_billing_date DATE NULL,
     payment_terms VARCHAR(100) NOT NULL DEFAULT 'Immediate Payment',
+    billing_interval ENUM('daily', 'weekly', 'monthly', 'yearly') NULL,
+    billing_interval_count INT NOT NULL DEFAULT 1,
     discount_id INT NULL,
     subtotal_amount DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
     tax_amount DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
     discount_amount DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
     total_recurring_amount DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
     auto_renew BOOLEAN NOT NULL DEFAULT TRUE,
+    paused_at DATETIME NULL,
+    resumed_at DATETIME NULL,
+    closed_at DATETIME NULL,
+    cancellation_reason TEXT NULL,
+    created_by INT NULL,
+    updated_by INT NULL,
     notes TEXT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     CONSTRAINT fk_subscriptions_customer FOREIGN KEY (customer_id) REFERENCES customers (id) ON DELETE RESTRICT,
-    CONSTRAINT fk_subscriptions_plan FOREIGN KEY (plan_id) REFERENCES plans (id) ON DELETE RESTRICT,
+    CONSTRAINT fk_subscriptions_plan FOREIGN KEY (plan_id) REFERENCES plans (id) ON DELETE SET NULL,
     CONSTRAINT fk_subscriptions_template FOREIGN KEY (template_id) REFERENCES quotation_templates (id) ON DELETE SET NULL,
     CONSTRAINT fk_subscriptions_discount FOREIGN KEY (discount_id) REFERENCES discounts (id) ON DELETE SET NULL,
+    CONSTRAINT fk_subscriptions_created_by FOREIGN KEY (created_by) REFERENCES users (id) ON DELETE SET NULL,
+    CONSTRAINT fk_subscriptions_updated_by FOREIGN KEY (updated_by) REFERENCES users (id) ON DELETE SET NULL,
     INDEX idx_subscriptions_customer (customer_id),
     INDEX idx_subscriptions_status (status),
     INDEX idx_subscriptions_billing (next_billing_date, status),
-    INDEX idx_subscriptions_plan (plan_id)
+    INDEX idx_subscriptions_plan (plan_id),
+    INDEX idx_subscriptions_dates (start_date, expiry_date),
+    INDEX idx_subscriptions_created_by (created_by)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS subscription_lines (
@@ -300,9 +318,11 @@ CREATE TABLE IF NOT EXISTS subscription_lines (
     subscription_id INT NOT NULL,
     product_id INT NOT NULL,
     variant_id INT NULL,
+    description VARCHAR(255) NULL,
     quantity INT NOT NULL DEFAULT 1,
-    unit_price DECIMAL(12, 2) NOT NULL,
+    unit_price DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
     tax_id INT NULL,
+    tax_rate DECIMAL(5, 2) NOT NULL DEFAULT 0.00,
     tax_amount DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
     subtotal_amount DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
     total_amount DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
@@ -313,6 +333,23 @@ CREATE TABLE IF NOT EXISTS subscription_lines (
     CONSTRAINT fk_sub_lines_variant FOREIGN KEY (variant_id) REFERENCES product_variants (id) ON DELETE SET NULL,
     CONSTRAINT fk_sub_lines_tax FOREIGN KEY (tax_id) REFERENCES taxes (id) ON DELETE SET NULL,
     INDEX idx_sub_lines_subscription (subscription_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS subscription_history (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    subscription_id INT NOT NULL,
+    from_status ENUM('draft', 'quotation', 'confirmed', 'active', 'paused', 'closed') NULL,
+    to_status ENUM('draft', 'quotation', 'confirmed', 'active', 'paused', 'closed') NOT NULL,
+    actor_user_id INT NULL,
+    action VARCHAR(50) NOT NULL DEFAULT 'status_change',
+    reason TEXT NULL,
+    metadata JSON NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_sub_history_subscription FOREIGN KEY (subscription_id) REFERENCES subscriptions (id) ON DELETE CASCADE,
+    CONSTRAINT fk_sub_history_actor FOREIGN KEY (actor_user_id) REFERENCES users (id) ON DELETE SET NULL,
+    INDEX idx_sub_history_sub (subscription_id),
+    INDEX idx_sub_history_actor (actor_user_id),
+    INDEX idx_sub_history_created (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- -----------------------------------------------------------------------------

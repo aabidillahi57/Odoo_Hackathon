@@ -120,26 +120,50 @@ This checklist tracks the implementation progress for the Brightloop Subscriptio
 
 ---
 
-### Phase 5: Customers & Quotation Templates
-- [ ] Backend CRUD for Customers (searchable, filterable)
-- [ ] Quotation Templates backend (presets with default plans, line items, and validity duration)
-- [ ] Internal Staff UI:
-  - [ ] Customer directory and detail view
-  - [ ] Quotation templates manager
-  - [ ] Quick quote generation from existing templates
+### Phase 5: Customers & Quotation Templates (Issuance Dependencies Implemented)
+- [x] Customer retrieval & search with RBAC isolation (`GET /api/customers`)
+- [x] Quotation Templates backend endpoint (`GET /api/quotation-templates`, `GET /api/quotation-templates/:id`, `POST /api/quotation-templates/:id/issue`)
+- [x] Preset quotation template lines schema & development seed data (`quotation_template_lines`)
+- [x] Quotation template proposal issuance workflow connected to subscription creation
+- [ ] Full standalone Admin CRUD for quotation templates (create/edit/archive template definitions — deferred)
 
 ---
 
-### Phase 6: Subscriptions & Lifecycle Management
-- [ ] Subscription number generator (e.g., `SUB-YYYY-XXXX`)
-- [ ] Subscriptions backend endpoints:
-  - [ ] Create, update, list, and filter subscriptions
-  - [ ] Add/remove line items (products, variants, quantities, taxes)
-  - [ ] Lifecycle state machine: `Draft` → `Quotation` → `Confirmed` → `Active` → `Closed` (with `Paused` support)
-- [ ] Staff & Admin UI:
-  - [ ] Subscription creation and editor with live price calculation
-  - [ ] Subscription list view with status filters and search
-  - [ ] Subscription detail view showing status transitions, dates, and line items
+### Phase 6: Subscriptions & Lifecycle Management — **Completed**
+- [x] **Database Schema & Migrations**:
+  - [x] `subscription_sequences` table for concurrency-safe atomic sequence tracking
+  - [x] `subscription_history` table for immutable audit logging (previous status, new status, actor, action, reason, metadata, timestamp)
+  - [x] `subscriptions` table updated with `billing_interval`, `billing_interval_count`, `paused_at`, `resumed_at`, `closed_at`, `cancellation_reason`, `created_by`, `updated_by`
+  - [x] `subscription_lines` updated with `description` and `tax_rate` snapshots
+  - [x] Repeatable migration `003_subscriptions_lifecycle.sql`, updated `schema.sql`, and resilient `scripts/migrate.js`
+- [x] **Concurrency-Safe Subscription Number Sequence**:
+  - [x] Server-side atomic number generator (`SUB-YYYY-XXXX`) using database row-level locking (`FOR UPDATE`) within active transaction
+  - [x] Strict persistence: numbers are never reused upon subscription closure or deletion
+  - [x] Never trusts client-supplied numbers; rollover across calendar years
+- [x] **Subscription API Endpoints** (`netlify/functions/subscriptions.ts`):
+  - [x] `GET /api/subscriptions` — Paginated list with search, status filters, plan filters; strictly isolates customer role to own records
+  - [x] `POST /api/subscriptions` — Staff/Admin creation of Draft/Quotation with server-validated customer, plan, dates, terms, and lines
+  - [x] `GET /api/subscriptions/:id` — Detail view with lines, customer, plan, and Staff-only audit history; IDOR protected
+  - [x] `PUT /api/subscriptions/:id` — Staff/Admin editing restricted to Draft/Quotation status; immutable terms for confirmed/active
+  - [x] `POST /api/subscriptions/:id/transitions` — Lifecycle state machine transition with plan policy enforcement and audit history logging
+  - [x] `POST /api/subscriptions/:id/renew` — Active subscription renewal extending contract cycle by plan interval with audit log
+- [x] **Lifecycle State Machine & Plan Policies** (`netlify/functions/_shared/lifecycle.ts`):
+  - [x] Valid transitions: `Draft` → `Quotation` → `Confirmed` → `Active` → `Closed`; `Draft`/`Quotation` → `Closed`
+  - [x] `Active` → `Paused` (enforces `plan.pause_allowed`); `Paused` → `Active` (resume); `Paused` → `Closed`
+  - [x] Early termination policy enforcement (`plan.early_close_policy`: 'allowed', 'fee_applies', 'not_allowed')
+  - [x] Role enforcement: Customers prevented from confirming, activating, or closing subscriptions directly; customer self-service pause/resume permitted when plan allows
+- [x] **Quotation-to-Subscription Issuance Workflow** (`netlify/functions/quotation-templates.ts`):
+  - [x] Staff/Admin selects customer and active template
+  - [x] System loads default plan and lines from database
+  - [x] User reviews and adjusts quantities, terms, start date, and validity days
+  - [x] Server calculates quotation expiry date and authoritative product, variant, and tax calculations
+  - [x] Atomic creation in single transaction: `SUB-YYYY-XXXX` generated, line snapshots stored, initial history recorded in Quotation status
+- [x] **Frontend User Interfaces**:
+  - [x] `SubscriptionsPage` (`/subscriptions`): Directory with search, status filter tabs with count badges, plan filter, pagination, quick actions
+  - [x] Subscription Creation Modal: Customer selection, plan selection, product/variant line builder with live calculations, review summary
+  - [x] Subscription Detail Modal: Complete contract cards, line items table, authorized lifecycle action bar, staff-only audit timeline
+  - [x] Quotation Issuance Modal (`/quotations`): Template cards, preset lines display, customer selection, validity calculation, issuance to subscription
+  - [x] Customer Self-Service Portal (`/portal`): Live subscriptions ledger, customer-friendly detail modal (hides internal notes/audit logs), self-service pause & resume
 
 ---
 

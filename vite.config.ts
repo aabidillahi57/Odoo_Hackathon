@@ -45,6 +45,18 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: () => '',
       },
+      // Subscription routes
+      '/api/subscriptions': {
+        target: 'http://localhost:8888/.netlify/functions/subscriptions',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/subscriptions/, ''),
+      },
+      // Quotation template routes
+      '/api/quotation-templates': {
+        target: 'http://localhost:8888/.netlify/functions/quotation-templates',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/quotation-templates/, ''),
+      },
       // Generic fallback: /api/health → /.netlify/functions/health, etc.
       '/api': {
         target: 'http://localhost:8888/.netlify/functions',

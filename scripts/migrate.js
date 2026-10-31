@@ -70,6 +70,61 @@ async function runMigration() {
     await connection.query(schemaSql);
     console.log('✓ Schema applied successfully.');
 
+    // 2b. Apply incremental column updates for existing databases (repeatable & safe)
+    console.log('Checking and applying schema migrations...');
+    const [subCols] = await connection.query(`
+      SELECT COLUMN_NAME FROM information_schema.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'subscriptions';
+    `);
+    const subColNames = subCols.map((c) => c.COLUMN_NAME);
+
+    if (!subColNames.includes('billing_interval')) {
+      await connection.query("ALTER TABLE subscriptions ADD COLUMN billing_interval ENUM('daily', 'weekly', 'monthly', 'yearly') NULL;");
+    }
+    if (!subColNames.includes('billing_interval_count')) {
+      await connection.query("ALTER TABLE subscriptions ADD COLUMN billing_interval_count INT NOT NULL DEFAULT 1;");
+    }
+    if (!subColNames.includes('paused_at')) {
+      await connection.query("ALTER TABLE subscriptions ADD COLUMN paused_at DATETIME NULL;");
+    }
+    if (!subColNames.includes('resumed_at')) {
+      await connection.query("ALTER TABLE subscriptions ADD COLUMN resumed_at DATETIME NULL;");
+    }
+    if (!subColNames.includes('closed_at')) {
+      await connection.query("ALTER TABLE subscriptions ADD COLUMN closed_at DATETIME NULL;");
+    }
+    if (!subColNames.includes('cancellation_reason')) {
+      await connection.query("ALTER TABLE subscriptions ADD COLUMN cancellation_reason TEXT NULL;");
+    }
+    if (!subColNames.includes('created_by')) {
+      await connection.query("ALTER TABLE subscriptions ADD COLUMN created_by INT NULL;");
+    }
+    if (!subColNames.includes('updated_by')) {
+      await connection.query("ALTER TABLE subscriptions ADD COLUMN updated_by INT NULL;");
+    }
+
+    // Ensure plan_id and next_billing_date allow NULL for draft/custom subscriptions
+    try {
+      await connection.query("ALTER TABLE subscriptions MODIFY COLUMN plan_id INT NULL;");
+      await connection.query("ALTER TABLE subscriptions MODIFY COLUMN next_billing_date DATE NULL;");
+    } catch {
+      // Ignore if already modified or constraint exists
+    }
+
+    const [lineCols] = await connection.query(`
+      SELECT COLUMN_NAME FROM information_schema.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'subscription_lines';
+    `);
+    const lineColNames = lineCols.map((c) => c.COLUMN_NAME);
+
+    if (!lineColNames.includes('description')) {
+      await connection.query("ALTER TABLE subscription_lines ADD COLUMN description VARCHAR(255) NULL;");
+    }
+    if (!lineColNames.includes('tax_rate')) {
+      await connection.query("ALTER TABLE subscription_lines ADD COLUMN tax_rate DECIMAL(5, 2) NOT NULL DEFAULT 0.00;");
+    }
+    console.log('✓ Incremental schema migrations verified.');
+
     // 3. Optional Seed Data
     if (isSeed) {
       const seedPath = path.join(rootDir, 'database', 'seed.sql');

@@ -48,6 +48,29 @@
   status = 200
 
 # =============================================================================
+# Subscription & Quotation API Routes
+# =============================================================================
+[[redirects]]
+  from = "/api/subscriptions"
+  to = "/.netlify/functions/subscriptions"
+  status = 200
+
+[[redirects]]
+  from = "/api/subscriptions/*"
+  to = "/.netlify/functions/subscriptions"
+  status = 200
+
+[[redirects]]
+  from = "/api/quotation-templates"
+  to = "/.netlify/functions/quotation-templates"
+  status = 200
+
+[[redirects]]
+  from = "/api/quotation-templates/*"
+  to = "/.netlify/functions/quotation-templates"
+  status = 200
+
+# =============================================================================
 # Generic API route — Rewrites /api/* to /.netlify/functions/:splat
 # Handles all non-auth endpoints (health, products, plans, customers, etc.)
 # =============================================================================

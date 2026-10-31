@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Product, Plan, Customer } from '../types';
+import { Product, Plan, Customer, Subscription, QuotationTemplate } from '../types';
 
 export interface HealthStatus {
   status: string;
@@ -29,6 +29,7 @@ export async function fetchApi<T>(endpoint: string, options?: RequestInit): Prom
       headers: {
         'Content-Type': 'application/json',
       },
+      credentials: 'include',
       ...options,
     });
 
@@ -176,4 +177,237 @@ export function useCustomers(params: { page: number; limit: number; search?: str
   }, [fetchCustomers]);
 
   return { customers, meta, isLoading, error, refetch: fetchCustomers };
+}
+
+/**
+ * Hook to fetch paginated subscriptions with filters
+ */
+export function useSubscriptions(params: {
+  page: number;
+  limit: number;
+  status?: string;
+  search?: string;
+  customerId?: number;
+  planId?: number;
+}) {
+  const [subscriptions, setSubscriptions] = useState<Subscription[] | null>(null);
+  const [meta, setMeta] = useState<{
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+    statusCounts: Record<string, number>;
+  } | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchSubscriptions = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const query = new URLSearchParams({
+        page: String(params.page),
+        limit: String(params.limit),
+        status: params.status || 'all',
+        search: params.search || '',
+      });
+      if (params.customerId) query.set('customerId', String(params.customerId));
+      if (params.planId) query.set('planId', String(params.planId));
+
+      const { data, meta } = await fetchApi<Subscription[]>(`subscriptions?${query.toString()}`);
+      setSubscriptions(data);
+      setMeta(meta as any);
+    } catch (err: any) {
+      setError(err.message);
+      setSubscriptions(null);
+      setMeta(null);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [params.page, params.limit, params.status, params.search, params.customerId, params.planId]);
+
+  useEffect(() => {
+    fetchSubscriptions();
+  }, [fetchSubscriptions]);
+
+  return { subscriptions, meta, isLoading, error, refetch: fetchSubscriptions };
+}
+
+/**
+ * Hook to fetch single subscription detail by ID
+ */
+export function useSubscription(id: number | null) {
+  const [subscription, setSubscription] = useState<Subscription | null>(null);
+  const [isLoading, setIsLoading] = useState(Boolean(id));
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchSubscription = useCallback(async () => {
+    if (!id) {
+      setSubscription(null);
+      setIsLoading(false);
+      return;
+    }
+    setIsLoading(true);
+    setError(null);
+    try {
+      const { data } = await fetchApi<Subscription>(`subscriptions/${id}`);
+      setSubscription(data);
+    } catch (err: any) {
+      setError(err.message);
+      setSubscription(null);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [id]);
+
+  useEffect(() => {
+    fetchSubscription();
+  }, [fetchSubscription]);
+
+  return { subscription, isLoading, error, refetch: fetchSubscription };
+}
+
+/**
+ * Hook to fetch active quotation templates
+ */
+export function useQuotationTemplates() {
+  const [templates, setTemplates] = useState<QuotationTemplate[] | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchTemplates = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const { data } = await fetchApi<QuotationTemplate[]>('quotation-templates');
+      setTemplates(data);
+    } catch (err: any) {
+      setError(err.message);
+      setTemplates(null);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchTemplates();
+  }, [fetchTemplates]);
+
+  return { templates, isLoading, error, refetch: fetchTemplates };
+}
+
+/**
+ * Mutation: Create a subscription
+ */
+export async function createSubscription(payload: {
+  customerId: number;
+  planId?: number;
+  templateId?: number;
+  status?: 'draft' | 'quotation';
+  startDate: string;
+  expiryDate?: string;
+  paymentTerms?: string;
+  autoRenew?: boolean;
+  notes?: string;
+  lines: Array<{
+    productId: number;
+    variantId?: number;
+    quantity: number;
+    taxId?: number;
+    description?: string;
+  }>;
+}) {
+  return fetchApi<{ id: number; subscriptionNumber: string; status: string; totalRecurringAmount: number }>('subscriptions', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+/**
+ * Mutation: Update draft subscription
+ */
+export async function updateSubscription(
+  id: number,
+  payload: {
+    startDate?: string;
+    expiryDate?: string;
+    paymentTerms?: string;
+    autoRenew?: boolean;
+    notes?: string;
+    lines?: Array<{
+      productId: number;
+      variantId?: number;
+      quantity: number;
+      taxId?: number;
+      description?: string;
+    }>;
+  }
+) {
+  return fetchApi<{ id: number; message: string }>(`subscriptions/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  });
+}
+
+/**
+ * Mutation: Transition subscription status
+ */
+export async function transitionSubscription(id: number, targetStatus: string, reason?: string) {
+  return fetchApi<{
+    id: number;
+    subscriptionNumber: string;
+    previousStatus: string;
+    newStatus: string;
+    message: string;
+  }>(`subscriptions/${id}/transitions`, {
+    method: 'POST',
+    body: JSON.stringify({ targetStatus, reason }),
+  });
+}
+
+/**
+ * Mutation: Renew active subscription
+ */
+export async function renewSubscription(id: number, reason?: string) {
+  return fetchApi<{
+    id: number;
+    subscriptionNumber: string;
+    previousExpiryDate: string;
+    newExpiryDate: string;
+    message: string;
+  }>(`subscriptions/${id}/renew`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  });
+}
+
+/**
+ * Mutation: Issue subscription from quotation template
+ */
+export async function issueSubscriptionFromTemplate(
+  templateId: number,
+  payload: {
+    customerId: number;
+    startDate?: string;
+    customValidityDays?: number;
+    paymentTerms?: string;
+    autoRenew?: boolean;
+    notes?: string;
+    lineOverrides?: Array<{ productId: number; variantId?: number | null; quantity: number }>;
+  }
+) {
+  return fetchApi<{
+    id: number;
+    subscriptionNumber: string;
+    status: string;
+    customerId: number;
+    customerName: string;
+    templateName: string;
+    expiryDate: string;
+    totalRecurringAmount: number;
+    message: string;
+  }>(`quotation-templates/${templateId}/issue`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
 }

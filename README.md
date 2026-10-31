@@ -199,17 +199,114 @@ All database operations execute server-side in `netlify/functions/`:
 | `/api/auth/reset-password` | `POST` | Validates reset token, updates bcrypt password hash, revokes all active sessions. |
 | `/api/auth/create-staff` | `POST` | **Admin only.** Creates an internal staff account. |
 
-### Core Data Endpoints
+### Core Data & Subscription Endpoints
 
-| Endpoint | Method | Description |
-| :--- | :---: | :--- |
-| `/api/health` | `GET` | Reports API service health and performs a live database ping test without exposing credentials. |
-| `/api/products` | `GET` | Fetches active catalog products with nested variants and price adjustments. |
-| `/api/plans` | `GET` | Returns active billing plans (daily, weekly, monthly, yearly) and lifecycle policies. |
-| `/api/customers` | `GET` | Returns paginated customer records (`?page=1&limit=10&search=...`) with safe bounds. |
+| Endpoint | Method | Role | Description |
+| :--- | :---: | :---: | :--- |
+| `/api/health` | `GET` | Public | Reports API service health and performs a live database ping test without exposing credentials. |
+| `/api/products` | `GET` | Public/Auth | Fetches active catalog products with nested variants and price adjustments. |
+| `/api/plans` | `GET` | Public/Auth | Returns active billing plans (daily, weekly, monthly, yearly) and lifecycle policies. |
+| `/api/customers` | `GET` | Staff/Customer | Returns paginated customer records. Customer accounts are strictly isolated to their own record. |
+| `/api/quotation-templates` | `GET` | Staff/Admin | Lists active quotation templates with preset product lines, plan details, and validity windows. |
+| `/api/quotation-templates/:id` | `GET` | Staff/Admin | Returns single template specification with full product, variant, and tax lines. |
+| `/api/quotation-templates/:id/issue` | `POST` | Staff/Admin | Issues a new subscription in `quotation` status using authoritative server pricing in a single transaction. |
+| `/api/subscriptions` | `GET` | Staff/Customer | Lists paginated subscriptions with status/customer/plan filters. Customers receive strictly their own agreements. |
+| `/api/subscriptions` | `POST` | Staff/Admin | Creates a new Draft or Quotation subscription with atomic `SUB-YYYY-XXXX` sequence generation. |
+| `/api/subscriptions/:id` | `GET` | Staff/Customer | Full subscription detail with lines and totals. Staff/Admin receive audit history; customer view hides internal notes. |
+| `/api/subscriptions/:id` | `PUT` | Staff/Admin | Modifies editable Draft/Quotation subscription lines and terms. Confirmed/Active subscriptions are immutable. |
+| `/api/subscriptions/:id/transitions` | `POST` | Staff/Customer | Executes state machine lifecycle transition with plan-policy validation and immutable audit history logging. |
+| `/api/subscriptions/:id/renew` | `POST` | Staff/Admin | Renews an active subscription for another billing cycle, advancing expiry and next billing dates with audit trail. |
 
-> [!NOTE]
-> Routes needing protection in later stages (subscriptions, invoices, payments) should use `getAuthenticatedUser(event)` from `netlify/functions/_shared/auth.ts` and check the returned user's role before serving data.
+---
+
+## Subscription Lifecycle & Management (Part 6)
+
+### 1. Subscription Data Model
+
+- **`subscriptions`**:
+  - `subscription_number`: Unique readable identifier (`SUB-YYYY-XXXX`).
+  - `customer_id`: Foreign key reference to `customers(id)`.
+  - `plan_id`: Optional foreign key reference to `plans(id)`.
+  - `template_id`: Optional foreign key reference to source `quotation_templates(id)` for proposal traceability.
+  - `status`: ENUM (`draft`, `quotation`, `confirmed`, `active`, `paused`, `closed`).
+  - `start_date` & `expiry_date`: Contract validity period.
+  - `next_billing_date`: Anticipated schedule date for subsequent recurring invoice generation.
+  - `payment_terms`: Invoice payment window terms (e.g., `Immediate Payment`, `Net 15`, `Net 30`, `Net 60`).
+  - `billing_interval` & `billing_interval_count`: Snapshot of plan recurring cycle (`daily`, `weekly`, `monthly`, `yearly`).
+  - `subtotal_amount`, `tax_amount`, `total_recurring_amount`: Authoritative monetary totals stored as `DECIMAL(12, 2)`.
+  - `paused_at`, `resumed_at`, `closed_at`, `cancellation_reason`: Detailed transition timestamps and termination reasons.
+  - `created_by` & `updated_by`: Foreign keys to `users(id)` for operational attribution.
+- **`subscription_lines`**:
+  - `subscription_id`: Foreign key reference cascading on parent delete.
+  - `product_id` & optional `variant_id`: References to catalog items.
+  - `description`: Text snapshot of product name and variant attributes at time of agreement.
+  - `quantity`: Positive integer (>= 1).
+  - `unit_price`: Authoritative base sales price + variant adjustment snapshot (`DECIMAL(12, 2)`).
+  - `tax_id` & `tax_rate`: Reference to configured tax and snapshot of tax percentage (`DECIMAL(5, 2)`).
+  - `tax_amount`, `subtotal_amount`, `total_amount`: Authoritative line totals (`DECIMAL(12, 2)`).
+- **`subscription_history`**:
+  - Immutable audit trail recording every state change, actor user reference, action name, optional reason, metadata JSON snapshot, and timestamp. Never exposed to customer portal users.
+
+### 2. Concurrency-Safe Subscription Number Generator
+
+- **Format:** `SUB-YYYY-XXXX` (e.g., `SUB-2026-0001`).
+- **Generation Strategy:**
+  - Numbers are generated strictly on the server in `netlify/functions/_shared/sequence.ts`.
+  - Uses a database table `subscription_sequences (sequence_year PRIMARY KEY, last_number INT)`.
+  - Employs an exclusive row-level lock (`SELECT ... FOR UPDATE`) within an active MySQL transaction.
+  - Strictly avoids race conditions caused by naive `MAX(id) + 1` queries.
+  - Sequence numbers are permanently consumed; closing or deleting a contract never reuses an issued number.
+  - Automatically resets sequence counting for each new calendar year.
+
+### 3. Lifecycle State Machine Matrix
+
+```
+       ┌──────────┐
+       │  Draft   │───────┐
+       └────┬─────┘       │
+            │             │
+            ▼             │
+     ┌─────────────┐      │
+     │  Quotation  │──────┤
+     └──────┬──────┘      │
+            │             │
+            ▼             │
+     ┌─────────────┐      │
+     │  Confirmed  │──────┤
+     └──────┬──────┘      │
+            │             │
+            ▼             ▼
+     ┌─────────────┐ ──► ┌────────┐
+ ┌───│   Active    │     │ Closed │ (Terminal)
+ │   └─────────────┘ ──► └────────┘
+ │       ▲     │              ▲
+ │Resume │     │ Pause        │
+ │       │     ▼              │
+ └───┌─────────────┐          │
+     │   Paused    │──────────┘
+     └─────────────┘
+```
+
+- **Valid Transitions:**
+  - `Draft` → `Quotation` (Issue proposal to client) or `Closed` (Discard draft)
+  - `Quotation` → `Confirmed` (Client approves proposal) or `Closed` (Proposal declined/expired)
+  - `Confirmed` → `Active` (Commence recurring service) or `Closed` (Cancel prior to start)
+  - `Active` → `Paused` (Only if `plan.pause_allowed = TRUE`)
+  - `Paused` → `Active` (Resume regular billing cycle) or `Closed`
+  - `Active` → `Closed` (Evaluates `plan.early_close_policy`; blocks if `not_allowed`, records notes if `fee_applies`)
+  - **Renewal:** Active contracts can be renewed, extending `expiry_date` by the plan interval count and logging a dedicated `renewed` event in `subscription_history`.
+- **Role Permissions:**
+  - **Admin & Staff:** Authorized to perform all business transitions and view full audit logs.
+  - **Customer:** Permitted to pause and resume their own active subscriptions (when plan allows). Cannot confirm, activate, or terminate contracts unilaterally.
+
+### 4. Quotation-to-Subscription Issuance Workflow
+
+1. Staff or Admin selects an active customer and an active quotation template.
+2. Server loads template specifications and preset line items.
+3. Sales staff can review start dates, validity periods (e.g., 30 days), and permitted quantities.
+4. Server recalculates authoritative product base prices, variant adjustments, and tax rates (client prices are not trusted).
+5. Expiry date is calculated from `startDate + validityDays`.
+6. Atomic database transaction creates the subscription in `quotation` status with generated `SUB-YYYY-XXXX` identifier, line item snapshots, and initial audit event referencing the template ID.
 
 ---
 
