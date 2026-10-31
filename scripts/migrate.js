@@ -184,6 +184,71 @@ async function runMigration() {
       await connection.query("ALTER TABLE invoice_lines ADD COLUMN tax_name VARCHAR(100) NULL;");
     }
 
+    // Part 8: Discounts & Payments incremental migrations
+    const [discountCols] = await connection.query(`
+      SELECT COLUMN_NAME FROM information_schema.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'discounts';
+    `);
+    const discountColNames = discountCols.map((c) => c.COLUMN_NAME);
+    if (!discountColNames.includes('name')) {
+      await connection.query("ALTER TABLE discounts ADD COLUMN name VARCHAR(255) NULL;");
+    }
+    if (!discountColNames.includes('archived_at')) {
+      await connection.query("ALTER TABLE discounts ADD COLUMN archived_at DATETIME NULL;");
+    }
+
+    const [usageCols] = await connection.query(`
+      SELECT COLUMN_NAME FROM information_schema.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'discount_usages';
+    `);
+    const usageColNames = usageCols.map((c) => c.COLUMN_NAME);
+    if (!usageColNames.includes('status')) {
+      await connection.query("ALTER TABLE discount_usages ADD COLUMN status ENUM('reserved', 'redeemed', 'released') NOT NULL DEFAULT 'redeemed';");
+    }
+    if (!usageColNames.includes('released_at')) {
+      await connection.query("ALTER TABLE discount_usages ADD COLUMN released_at DATETIME NULL;");
+    }
+
+    const [paymentCols] = await connection.query(`
+      SELECT COLUMN_NAME FROM information_schema.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'payments';
+    `);
+    const paymentColNames = paymentCols.map((c) => c.COLUMN_NAME);
+    if (!paymentColNames.includes('status')) {
+      await connection.query("ALTER TABLE payments ADD COLUMN status ENUM('completed', 'voided') NOT NULL DEFAULT 'completed';");
+    }
+    if (!paymentColNames.includes('recorded_by')) {
+      await connection.query("ALTER TABLE payments ADD COLUMN recorded_by INT NULL;");
+      try {
+        await connection.query("ALTER TABLE payments ADD CONSTRAINT fk_payments_recorded_by FOREIGN KEY (recorded_by) REFERENCES users (id) ON DELETE SET NULL;");
+      } catch {
+        // Ignore if constraint exists
+      }
+    }
+    if (!paymentColNames.includes('voided_at')) {
+      await connection.query("ALTER TABLE payments ADD COLUMN voided_at DATETIME NULL;");
+    }
+    if (!paymentColNames.includes('voided_by')) {
+      await connection.query("ALTER TABLE payments ADD COLUMN voided_by INT NULL;");
+      try {
+        await connection.query("ALTER TABLE payments ADD CONSTRAINT fk_payments_voided_by FOREIGN KEY (voided_by) REFERENCES users (id) ON DELETE SET NULL;");
+      } catch {
+        // Ignore if constraint exists
+      }
+    }
+    if (!paymentColNames.includes('void_reason')) {
+      await connection.query("ALTER TABLE payments ADD COLUMN void_reason TEXT NULL;");
+    }
+
+    // Ensure payment_sequences table exists
+    await connection.query(`
+      CREATE TABLE IF NOT EXISTS payment_sequences (
+        sequence_year INT PRIMARY KEY,
+        last_number INT NOT NULL DEFAULT 0,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+
     console.log('✓ Incremental schema migrations verified.');
 
     // 3. Optional Seed Data

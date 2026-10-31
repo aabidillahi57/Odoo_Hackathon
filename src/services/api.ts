@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Product, Plan, Customer, Subscription, QuotationTemplate, Tax, Invoice, BillingRunSummary } from '../types';
+import { Product, Plan, Customer, Subscription, QuotationTemplate, Tax, Invoice, BillingRunSummary, Payment, Discount, DashboardData } from '../types';
 
 export interface HealthStatus {
   status: string;
@@ -654,5 +654,244 @@ export async function triggerBillingRun(payload: { asOfDate?: string; batchLimit
     method: 'POST',
     body: JSON.stringify(payload),
   });
+}
+
+/**
+ * Query: Paginated and filterable discounts
+ */
+export function useDiscounts(filters?: {
+  status?: string;
+  type?: string;
+  applies_to?: string;
+  search?: string;
+  page?: number;
+  limit?: number;
+}) {
+  const [discounts, setDiscounts] = useState<Discount[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [meta, setMeta] = useState<Record<string, any>>({});
+
+  const fetchDiscounts = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const queryParams = new URLSearchParams();
+      if (filters?.status) queryParams.set('status', filters.status);
+      if (filters?.type) queryParams.set('type', filters.type);
+      if (filters?.applies_to) queryParams.set('applies_to', filters.applies_to);
+      if (filters?.search) queryParams.set('search', filters.search);
+      if (filters?.page) queryParams.set('page', filters.page.toString());
+      if (filters?.limit) queryParams.set('limit', filters.limit.toString());
+
+      const res = await fetchApi<Discount[]>(`discounts?${queryParams.toString()}`);
+      setDiscounts(res.data);
+      if (res.meta) setMeta(res.meta);
+    } catch (err: any) {
+      setError(err.message || 'Failed to fetch discounts');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [filters?.status, filters?.type, filters?.applies_to, filters?.search, filters?.page, filters?.limit]);
+
+  useEffect(() => {
+    fetchDiscounts();
+  }, [fetchDiscounts]);
+
+  return { discounts, isLoading, error, meta, refetch: fetchDiscounts };
+}
+
+/**
+ * Mutation: Create discount rule (Admin only)
+ */
+export async function createDiscount(payload: {
+  code: string;
+  name?: string;
+  description?: string;
+  discountType: 'fixed' | 'percentage';
+  value: number;
+  minPurchaseAmount?: number;
+  minQuantity?: number;
+  startDate?: string | null;
+  endDate?: string | null;
+  maxUses?: number | null;
+  appliesTo: 'order' | 'product';
+  applicableProductId?: number | null;
+  applicableVariantId?: number | null;
+  isActive?: boolean;
+}) {
+  return fetchApi<{ message: string; discountId: number; discount: Discount }>('discounts', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+/**
+ * Mutation: Update discount rule (Admin only)
+ */
+export async function updateDiscount(
+  id: number,
+  payload: {
+    name?: string;
+    description?: string;
+    value?: number;
+    minPurchaseAmount?: number;
+    minQuantity?: number;
+    startDate?: string | null;
+    endDate?: string | null;
+    maxUses?: number | null;
+    appliesTo?: 'order' | 'product';
+    applicableProductId?: number | null;
+    applicableVariantId?: number | null;
+    isActive?: boolean;
+  }
+) {
+  return fetchApi<{ message: string; discountId: number; discount: Discount }>(`discounts/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  });
+}
+
+/**
+ * Mutation: Archive discount rule (Admin only)
+ */
+export async function archiveDiscount(id: number) {
+  return fetchApi<{ message: string; discountId: number; isArchived: boolean }>(`discounts/${id}/archive`, {
+    method: 'POST',
+  });
+}
+
+/**
+ * Query: Paginated and filterable recorded payments
+ */
+export function usePayments(filters?: {
+  invoice_id?: number;
+  customer_id?: number;
+  method?: string;
+  status?: string;
+  search?: string;
+  page?: number;
+  limit?: number;
+}) {
+  const [payments, setPayments] = useState<Payment[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [meta, setMeta] = useState<Record<string, any>>({});
+
+  const fetchPayments = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const queryParams = new URLSearchParams();
+      if (filters?.invoice_id) queryParams.set('invoice_id', filters.invoice_id.toString());
+      if (filters?.customer_id) queryParams.set('customer_id', filters.customer_id.toString());
+      if (filters?.method) queryParams.set('method', filters.method);
+      if (filters?.status) queryParams.set('status', filters.status);
+      if (filters?.search) queryParams.set('search', filters.search);
+      if (filters?.page) queryParams.set('page', filters.page.toString());
+      if (filters?.limit) queryParams.set('limit', filters.limit.toString());
+
+      const res = await fetchApi<Payment[]>(`payments?${queryParams.toString()}`);
+      setPayments(res.data);
+      if (res.meta) setMeta(res.meta);
+    } catch (err: any) {
+      setError(err.message || 'Failed to fetch payments');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [
+    filters?.invoice_id,
+    filters?.customer_id,
+    filters?.method,
+    filters?.status,
+    filters?.search,
+    filters?.page,
+    filters?.limit,
+  ]);
+
+  useEffect(() => {
+    fetchPayments();
+  }, [fetchPayments]);
+
+  return { payments, isLoading, error, meta, refetch: fetchPayments };
+}
+
+/**
+ * Mutation: Record manual payment against an invoice (Admin/Staff)
+ */
+export async function recordPayment(payload: {
+  invoiceId: number;
+  amount: number;
+  paymentMethod?: string;
+  paymentDate?: string;
+  transactionReference?: string;
+  notes?: string;
+}) {
+  return fetchApi<{
+    message: string;
+    paymentId: number;
+    paymentNumber: string;
+    payment: Payment;
+    invoice: {
+      id: number;
+      invoiceNumber: string;
+      status: string;
+      totalAmount: number;
+      amountPaid: number;
+      balanceDue: number;
+    };
+  }>('payments', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+/**
+ * Mutation: Void a recorded payment with audited reason (Admin/Staff)
+ */
+export async function voidPayment(id: number, voidReason: string) {
+  return fetchApi<{
+    message: string;
+    paymentId: number;
+    status: string;
+    reconciledInvoice: {
+      id: number;
+      status: string;
+      totalAmount: number;
+      amountPaid: number;
+      balanceDue: number;
+    };
+  }>(`payments/${id}/void`, {
+    method: 'POST',
+    body: JSON.stringify({ voidReason }),
+  });
+}
+
+/**
+ * Query: Live dashboard executive overview metrics
+ */
+export function useDashboardMetrics() {
+  const [data, setData] = useState<DashboardData | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchMetrics = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const res = await fetchApi<DashboardData>('dashboard/metrics');
+      setData(res.data);
+    } catch (err: any) {
+      setError(err.message || 'Failed to fetch dashboard metrics');
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchMetrics();
+  }, [fetchMetrics]);
+
+  return { data, isLoading, error, refetch: fetchMetrics };
 }
 

@@ -45,6 +45,24 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: () => '',
       },
+      // Dashboard routes
+      '/api/dashboard': {
+        target: 'http://localhost:8888/.netlify/functions/dashboard',
+        changeOrigin: true,
+        rewrite: () => '',
+      },
+      // Discounts routes
+      '/api/discounts': {
+        target: 'http://localhost:8888/.netlify/functions/discounts',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/discounts/, ''),
+      },
+      // Payments routes
+      '/api/payments': {
+        target: 'http://localhost:8888/.netlify/functions/payments',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/payments/, ''),
+      },
       // Billing run routes
       '/api/billing/run': {
         target: 'http://localhost:8888/.netlify/functions/billing-run',

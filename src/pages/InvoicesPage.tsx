@@ -10,6 +10,7 @@ import {
   X,
   Ban,
   Check,
+  DollarSign,
 } from 'lucide-react';
 import { PageHeader } from '../components/common/PageHeader';
 import { Button } from '../components/common/Button';
@@ -24,6 +25,7 @@ import {
   cancelInvoice,
   sendInvoiceEmailDispatch,
   triggerBillingRun,
+  recordPayment,
 } from '../services/api';
 import { DEMO_RECENT_INVOICES } from '../data/demoData';
 import { Invoice, BillingRunSummary } from '../types';
@@ -55,6 +57,16 @@ export const InvoicesPage: React.FC = () => {
   const [actionError, setActionError] = useState<string | null>(null);
   const [isSendingEmail, setIsSendingEmail] = useState<boolean>(false);
   const [isConfirming, setIsConfirming] = useState<boolean>(false);
+
+  // Quick Record Payment Modal State
+  const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
+  const [paymentAmount, setPaymentAmount] = useState<number | ''>('');
+  const [paymentMethod, setPaymentMethod] = useState<string>('bank_transfer');
+  const [paymentDate, setPaymentDate] = useState<string>(new Date().toISOString().substring(0, 10));
+  const [paymentRef, setPaymentRef] = useState<string>('');
+  const [paymentNotes, setPaymentNotes] = useState<string>('');
+  const [isRecordingPayment, setIsRecordingPayment] = useState(false);
+  const [paymentError, setPaymentError] = useState<string | null>(null);
 
   // Live query
   const {
@@ -208,6 +220,43 @@ export const InvoicesPage: React.FC = () => {
       setActionError(err.message || 'Failed to dispatch email via Brevo.');
     } finally {
       setIsSendingEmail(false);
+    }
+  };
+
+  const handleQuickPaymentSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeInvoice) return;
+    setPaymentError(null);
+
+    const num = Number(paymentAmount);
+    if (!num || num <= 0) {
+      setPaymentError('Payment amount must be greater than zero.');
+      return;
+    }
+    if (num > activeInvoice.balanceDue) {
+      setPaymentError(`Payment amount ($${num.toFixed(2)}) exceeds balance due ($${activeInvoice.balanceDue.toFixed(2)}).`);
+      return;
+    }
+
+    setIsRecordingPayment(true);
+    try {
+      await recordPayment({
+        invoiceId: activeInvoice.id,
+        amount: num,
+        paymentMethod,
+        paymentDate,
+        transactionReference: paymentRef.trim() || undefined,
+        notes: paymentNotes.trim() || undefined,
+      });
+
+      setActionSuccess(`Payment of $${num.toFixed(2)} recorded on invoice ${activeInvoice.invoiceNumber}.`);
+      setIsPaymentModalOpen(false);
+      refetch();
+      if (selectedInvoiceId) refetchDetail();
+    } catch (err: any) {
+      setPaymentError(err.message || 'Failed to record payment.');
+    } finally {
+      setIsRecordingPayment(false);
     }
   };
 
@@ -849,7 +898,7 @@ export const InvoicesPage: React.FC = () => {
                     </div>
                     {(activeInvoice.discountAmount ?? 0) > 0 && (
                       <div className="flex justify-between text-emerald-700">
-                        <span>Discount:</span>
+                        <span>Discount {activeInvoice.discountUsage?.code ? `(${activeInvoice.discountUsage.code})` : ''}:</span>
                         <span className="font-mono font-medium">-${(activeInvoice.discountAmount ?? 0).toFixed(2)}</span>
                       </div>
                     )}
@@ -869,6 +918,56 @@ export const InvoicesPage: React.FC = () => {
                     </div>
                   </div>
                 </div>
+
+                {/* Recorded Payments Table */}
+                {activeInvoice.payments && activeInvoice.payments.length > 0 && (
+                  <div className="space-y-2 pt-2">
+                    <h4 className="font-semibold text-slate-800 text-xs flex items-center gap-1.5">
+                      <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
+                      Recorded Payment Transactions ({activeInvoice.payments.length})
+                    </h4>
+                    <div className="border border-slate-200 rounded-lg overflow-hidden">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200 text-[11px]">
+                          <tr>
+                            <th className="py-2 px-3">Payment #</th>
+                            <th className="py-2 px-3">Date</th>
+                            <th className="py-2 px-3">Method</th>
+                            <th className="py-2 px-3">Ref</th>
+                            <th className="py-2 px-3 text-right">Amount</th>
+                            <th className="py-2 px-3 text-center">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {activeInvoice.payments.map((p) => (
+                            <tr key={p.id} className={p.status === 'voided' ? 'bg-rose-50/20 text-slate-400' : ''}>
+                              <td className="py-2 px-3 font-mono font-medium">
+                                <span className={p.status === 'voided' ? 'line-through text-slate-400' : 'text-slate-900'}>
+                                  {p.paymentNumber}
+                                </span>
+                              </td>
+                              <td className="py-2 px-3 text-slate-600">{p.paymentDate ? p.paymentDate.substring(0, 10) : '—'}</td>
+                              <td className="py-2 px-3 capitalize">{(p.paymentMethod || 'other').replace('_', ' ')}</td>
+                              <td className="py-2 px-3 font-mono text-[11px] text-slate-500">{p.transactionReference || '—'}</td>
+                              <td className="py-2 px-3 text-right font-mono font-bold">
+                                <span className={p.status === 'voided' ? 'line-through text-slate-400' : 'text-emerald-600'}>
+                                  ${Number(p.amount).toFixed(2)}
+                                </span>
+                              </td>
+                              <td className="py-2 px-3 text-center">
+                                {p.status === 'voided' ? (
+                                  <span className="text-[10px] text-rose-600 font-medium">Voided</span>
+                                ) : (
+                                  <Badge variant="success" size="sm">Completed</Badge>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
 
                 {/* Delivery & Dispatch Metadata */}
                 <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between text-[11px] text-slate-500">
@@ -926,6 +1025,26 @@ export const InvoicesPage: React.FC = () => {
                   >
                     Send via Brevo
                   </Button>
+
+                  {/* Record Payment */}
+                  {activeInvoice.status === 'confirmed' && activeInvoice.balanceDue > 0 && (
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      icon={<DollarSign className="w-3.5 h-3.5" />}
+                      onClick={() => {
+                        setPaymentAmount(activeInvoice.balanceDue);
+                        setPaymentMethod('bank_transfer');
+                        setPaymentDate(new Date().toISOString().substring(0, 10));
+                        setPaymentRef('');
+                        setPaymentNotes('');
+                        setPaymentError(null);
+                        setIsPaymentModalOpen(true);
+                      }}
+                    >
+                      Record Payment
+                    </Button>
+                  )}
 
                   {/* Cancel Invoice */}
                   {activeInvoice.status !== 'cancelled' && activeInvoice.amountPaid === 0 && (
@@ -1002,6 +1121,127 @@ export const InvoicesPage: React.FC = () => {
                   className="bg-rose-600 hover:bg-rose-700"
                 >
                   Confirm Cancellation
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* 4. QUICK RECORD PAYMENT MODAL                                         */}
+      {/* ===================================================================== */}
+      {isPaymentModalOpen && activeInvoice && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-5 space-y-4 border border-slate-200 animate-in fade-in zoom-in-95 text-xs">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center">
+                  <DollarSign className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">
+                    Record Payment for {activeInvoice.invoiceNumber}
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    Current balance due: ${activeInvoice.balanceDue.toFixed(2)}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsPaymentModalOpen(false)}
+                className="text-slate-400 hover:text-slate-600 p-1"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {paymentError && <ErrorAlert message={paymentError} onDismiss={() => setPaymentError(null)} />}
+
+            <form onSubmit={handleQuickPaymentSubmit} className="space-y-3">
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">
+                  Payment Amount ($) <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0.01"
+                  max={activeInvoice.balanceDue}
+                  required
+                  value={paymentAmount}
+                  onChange={(e) => setPaymentAmount(e.target.value === '' ? '' : parseFloat(e.target.value))}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:bg-white text-slate-900 font-mono font-bold"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-slate-700 font-semibold mb-1">Method</label>
+                  <select
+                    value={paymentMethod}
+                    onChange={(e) => setPaymentMethod(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:bg-white text-slate-900"
+                  >
+                    <option value="bank_transfer">Bank Transfer</option>
+                    <option value="credit_card">Credit Card</option>
+                    <option value="cash">Cash</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-slate-700 font-semibold mb-1">Date</label>
+                  <input
+                    type="date"
+                    required
+                    value={paymentDate}
+                    onChange={(e) => setPaymentDate(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:bg-white text-slate-900 font-mono"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">Transaction Ref</label>
+                <input
+                  type="text"
+                  placeholder="e.g. WIRE-991823"
+                  value={paymentRef}
+                  onChange={(e) => setPaymentRef(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:bg-white text-slate-900 font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">Notes</label>
+                <textarea
+                  rows={2}
+                  placeholder="Optional notes..."
+                  value={paymentNotes}
+                  onChange={(e) => setPaymentNotes(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:bg-white text-slate-900"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  type="button"
+                  onClick={() => setIsPaymentModalOpen(false)}
+                  disabled={isRecordingPayment}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  type="submit"
+                  isLoading={isRecordingPayment}
+                  icon={<DollarSign className="w-3.5 h-3.5" />}
+                >
+                  Record Payment
                 </Button>
               </div>
             </form>

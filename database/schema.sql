@@ -229,6 +229,7 @@ CREATE TABLE IF NOT EXISTS quotation_template_lines (
 CREATE TABLE IF NOT EXISTS discounts (
     id INT AUTO_INCREMENT PRIMARY KEY,
     code VARCHAR(50) NOT NULL UNIQUE,
+    name VARCHAR(255) NULL,
     description VARCHAR(255) NULL,
     discount_type ENUM('fixed', 'percentage') NOT NULL,
     value DECIMAL(12, 2) NOT NULL,
@@ -241,6 +242,7 @@ CREATE TABLE IF NOT EXISTS discounts (
     applies_to ENUM('order', 'product') NOT NULL DEFAULT 'order',
     applicable_product_id INT NULL,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    archived_at DATETIME NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     CONSTRAINT fk_discounts_product FOREIGN KEY (applicable_product_id) REFERENCES products (id) ON DELETE SET NULL,
@@ -255,11 +257,14 @@ CREATE TABLE IF NOT EXISTS discount_usages (
     invoice_id INT NULL,
     customer_id INT NOT NULL,
     amount_applied DECIMAL(12, 2) NOT NULL,
+    status ENUM('reserved', 'redeemed', 'released') NOT NULL DEFAULT 'redeemed',
+    released_at DATETIME NULL,
     used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_usage_discount FOREIGN KEY (discount_id) REFERENCES discounts (id) ON DELETE RESTRICT,
     CONSTRAINT fk_usage_customer FOREIGN KEY (customer_id) REFERENCES customers (id) ON DELETE RESTRICT,
     INDEX idx_discount_usages_discount (discount_id),
-    INDEX idx_discount_usages_customer (customer_id)
+    INDEX idx_discount_usages_customer (customer_id),
+    INDEX idx_discount_usages_invoice (invoice_id, status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- -----------------------------------------------------------------------------
@@ -444,10 +449,17 @@ CREATE TABLE IF NOT EXISTS invoice_lines (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- -----------------------------------------------------------------------------
--- 10. Payments
+-- 10. Payments & Payment Sequences
 -- Records payments against invoices; reconciles amount_paid and balance_due.
+-- Concurrency-safe atomic payment sequence numbers (PAY-YYYY-XXXX).
 -- Financial history is strictly preserved (ON DELETE RESTRICT).
 -- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS payment_sequences (
+    sequence_year INT PRIMARY KEY,
+    last_number INT NOT NULL DEFAULT 0,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS payments (
     id INT AUTO_INCREMENT PRIMARY KEY,
     payment_number VARCHAR(50) NOT NULL UNIQUE,
@@ -456,13 +468,21 @@ CREATE TABLE IF NOT EXISTS payments (
     amount DECIMAL(12, 2) NOT NULL,
     payment_method ENUM('credit_card', 'bank_transfer', 'cash', 'other') NOT NULL DEFAULT 'bank_transfer',
     payment_date DATE NOT NULL,
+    status ENUM('completed', 'voided') NOT NULL DEFAULT 'completed',
     transaction_reference VARCHAR(100) NULL,
     notes TEXT NULL,
+    recorded_by INT NULL,
+    voided_at DATETIME NULL,
+    voided_by INT NULL,
+    void_reason TEXT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     CONSTRAINT fk_payments_invoice FOREIGN KEY (invoice_id) REFERENCES invoices (id) ON DELETE RESTRICT,
     CONSTRAINT fk_payments_customer FOREIGN KEY (customer_id) REFERENCES customers (id) ON DELETE RESTRICT,
+    CONSTRAINT fk_payments_recorded_by FOREIGN KEY (recorded_by) REFERENCES users (id) ON DELETE SET NULL,
+    CONSTRAINT fk_payments_voided_by FOREIGN KEY (voided_by) REFERENCES users (id) ON DELETE SET NULL,
     INDEX idx_payments_invoice (invoice_id),
     INDEX idx_payments_customer (customer_id),
-    INDEX idx_payments_date (payment_date)
+    INDEX idx_payments_date (payment_date),
+    INDEX idx_payments_status (status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

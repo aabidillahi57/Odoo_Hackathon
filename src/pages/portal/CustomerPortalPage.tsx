@@ -15,6 +15,7 @@ import {
   PlayCircle,
   X,
   Printer,
+  ArrowDownLeft,
 } from 'lucide-react';
 import { Card } from '../../components/common/Card';
 import { Button } from '../../components/common/Button';
@@ -28,6 +29,7 @@ import {
   transitionSubscription,
   useInvoices,
   useInvoiceDetail,
+  usePayments,
 } from '../../services/api';
 
 export const CustomerPortalPage: React.FC = () => {
@@ -72,6 +74,11 @@ export const CustomerPortalPage: React.FC = () => {
   });
   const { invoice: selectedInvoice, isLoading: isLoadingInvoiceDetail } =
     useInvoiceDetail(selectedInvoiceId);
+
+  // Customer Payments Query (strictly isolated by server session)
+  const { payments: customerPayments, isLoading: isLoadingPayments } = usePayments({
+    limit: 50,
+  });
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -367,6 +374,76 @@ export const CustomerPortalPage: React.FC = () => {
                     <h4 className="text-sm font-semibold text-slate-800">No Invoices Issued</h4>
                     <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1">
                       No invoices have been issued to your customer account yet. When recurring cycles process, your official receipts will appear here.
+                    </p>
+                  </div>
+                )}
+              </Card>
+
+              {/* Customer Recorded Payments / Receipts */}
+              <Card
+                title="My Payment Receipts"
+                description="Audited ledger of recorded wire transfers, credit card charges, and credits."
+              >
+                {isLoadingPayments ? (
+                  <div className="p-8 flex justify-center">
+                    <LoadingSpinner size="md" label="Loading payment receipts..." />
+                  </div>
+                ) : customerPayments && customerPayments.length > 0 ? (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs">
+                      <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-200">
+                        <tr>
+                          <th className="py-2.5 px-3">Receipt #</th>
+                          <th className="py-2.5 px-3">Invoice #</th>
+                          <th className="py-2.5 px-3">Date</th>
+                          <th className="py-2.5 px-3">Method</th>
+                          <th className="py-2.5 px-3">Transaction Ref</th>
+                          <th className="py-2.5 px-3 text-right">Amount</th>
+                          <th className="py-2.5 px-3 text-center">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {customerPayments.map((pmt) => (
+                          <tr key={pmt.id} className="hover:bg-slate-50/50">
+                            <td className="py-2.5 px-3 font-mono font-medium text-slate-900">
+                              <div className="flex items-center gap-1.5">
+                                <ArrowDownLeft className="w-3.5 h-3.5 text-emerald-600" />
+                                <span>{pmt.paymentNumber}</span>
+                              </div>
+                            </td>
+                            <td className="py-2.5 px-3 font-mono font-medium text-indigo-600">
+                              {pmt.invoiceNumber}
+                            </td>
+                            <td className="py-2.5 px-3 text-slate-600">
+                              {pmt.paymentDate ? pmt.paymentDate.substring(0, 10) : '—'}
+                            </td>
+                            <td className="py-2.5 px-3 capitalize">
+                              <Badge variant="neutral" size="sm">
+                                {(pmt.paymentMethod || 'other').replace('_', ' ')}
+                              </Badge>
+                            </td>
+                            <td className="py-2.5 px-3 font-mono text-slate-500 text-[11px]">
+                              {pmt.transactionReference || '—'}
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-mono font-bold text-emerald-600">
+                              ${Number(pmt.amount).toFixed(2)}
+                            </td>
+                            <td className="py-2.5 px-3 text-center">
+                              {pmt.status === 'voided' ? (
+                                <Badge variant="danger" size="sm">Voided</Badge>
+                              ) : (
+                                <Badge variant="success" size="sm">Cleared</Badge>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="p-6 border-2 border-dashed border-slate-200 rounded-lg text-center bg-slate-50/50">
+                    <p className="text-xs text-slate-500">
+                      No payments have been logged yet for your account.
                     </p>
                   </div>
                 )}

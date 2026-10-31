@@ -5,16 +5,16 @@ import {
   AlertTriangle,
   Clock,
   ArrowUpRight,
-  Filter,
   Calendar,
   ToggleLeft,
   ToggleRight,
-  FileSpreadsheet,
+  Database,
+  RefreshCw,
 } from 'lucide-react';
 import { Card } from '../components/common/Card';
 import { Badge } from '../components/common/Badge';
-import { Button } from '../components/common/Button';
-import { EmptyState } from '../components/common/EmptyState';
+import { LoadingSpinner } from '../components/common/LoadingSpinner';
+import { useDashboardMetrics } from '../services/api';
 import {
   DEMO_DASHBOARD_METRICS,
   DEMO_RECENT_INVOICES,
@@ -22,8 +22,11 @@ import {
 } from '../data/demoData';
 
 export const OverviewPage: React.FC = () => {
-  const [showDemoData, setShowDemoData] = useState(true);
+  const [useLiveDb, setUseLiveDb] = useState(true);
   const [dateRange, setDateRange] = useState('30d');
+
+  // Live Database Metrics Query
+  const { data: liveData, isLoading, refetch } = useDashboardMetrics();
 
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('en-US', {
@@ -63,15 +66,25 @@ export const OverviewPage: React.FC = () => {
     }
   };
 
+  const metrics = (useLiveDb && liveData?.metrics) ? liveData.metrics : DEMO_DASHBOARD_METRICS;
+  const recentInvoices = (useLiveDb && liveData?.recentInvoices) ? liveData.recentInvoices : DEMO_RECENT_INVOICES;
+  const recentSubscriptions = (useLiveDb && liveData?.recentSubscriptions) ? liveData.recentSubscriptions : DEMO_RECENT_SUBSCRIPTIONS;
+
   return (
     <div className="space-y-6">
-      {/* Top Controls & Demo Toggle */}
+      {/* Top Controls & Mode Switcher */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-slate-200/80 pb-5">
         <div>
           <div className="flex items-center gap-2.5">
             <h1 className="text-2xl font-bold tracking-tight text-slate-900">Executive Overview</h1>
-            <Badge variant={showDemoData ? 'warning' : 'neutral'} size="sm">
-              {showDemoData ? 'Sample Demo Figures' : 'Empty Database State'}
+            <Badge variant={useLiveDb ? 'success' : 'warning'} size="sm">
+              {useLiveDb ? (
+                <span className="flex items-center gap-1">
+                  <Database className="w-3 h-3" /> Live MySQL Database
+                </span>
+              ) : (
+                'Sample Demo Figures'
+              )}
             </Badge>
           </div>
           <p className="mt-1 text-sm text-slate-500">
@@ -80,6 +93,17 @@ export const OverviewPage: React.FC = () => {
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
+          {/* Refresh button */}
+          {useLiveDb && (
+            <button
+              onClick={() => refetch()}
+              className="p-1.5 text-slate-500 hover:text-slate-800 bg-white border border-slate-200 rounded-lg shadow-xs hover:bg-slate-50 transition-colors"
+              title="Refresh live metrics"
+            >
+              <RefreshCw className="w-4 h-4" />
+            </button>
+          )}
+
           {/* Date range filter */}
           <div className="flex items-center bg-white border border-slate-200 rounded-lg p-1 text-xs shadow-xs">
             <Calendar className="w-3.5 h-3.5 text-slate-400 ml-2 mr-1" />
@@ -89,29 +113,33 @@ export const OverviewPage: React.FC = () => {
               className="bg-transparent border-none text-slate-700 font-medium focus:ring-0 cursor-pointer pr-3"
             >
               <option value="7d">Last 7 Days</option>
-              <option value="30d">Last 30 Days (Demo)</option>
+              <option value="30d">Last 30 Days</option>
               <option value="90d">Last Quarter</option>
               <option value="1y">Year to Date</option>
             </select>
           </div>
 
-          {/* Toggle between Demo Data and Empty State */}
+          {/* Toggle between Live Database and Demo Data */}
           <button
-            onClick={() => setShowDemoData(!showDemoData)}
+            onClick={() => setUseLiveDb(!useLiveDb)}
             className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-medium text-slate-700 shadow-xs transition-colors"
-            title="Toggle between sample demonstration figures and empty state"
+            title="Toggle between live MySQL metrics and sample demo figures"
           >
-            {showDemoData ? (
-              <ToggleRight className="w-4 h-4 text-indigo-600" />
+            {useLiveDb ? (
+              <ToggleRight className="w-4 h-4 text-emerald-600" />
             ) : (
               <ToggleLeft className="w-4 h-4 text-slate-400" />
             )}
-            <span>{showDemoData ? 'Showing Demo Data' : 'Showing Empty State'}</span>
+            <span>{useLiveDb ? 'Live Database' : 'Demo Sandbox'}</span>
           </button>
         </div>
       </div>
 
-      {showDemoData ? (
+      {isLoading && useLiveDb ? (
+        <div className="p-12 flex justify-center">
+          <LoadingSpinner size="lg" label="Loading live executive metrics..." />
+        </div>
+      ) : (
         <>
           {/* Key Metrics Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -127,11 +155,11 @@ export const OverviewPage: React.FC = () => {
               </div>
               <div className="mt-3">
                 <div className="text-2xl font-bold text-slate-900">
-                  {DEMO_DASHBOARD_METRICS.activeSubscriptions}
+                  {metrics.activeSubscriptions}
                 </div>
                 <div className="mt-1 flex items-center gap-1.5 text-xs text-emerald-600 font-medium">
                   <ArrowUpRight className="w-3.5 h-3.5" />
-                  <span>{DEMO_DASHBOARD_METRICS.activeSubscriptionsChange}</span>
+                  <span>{metrics.activeSubscriptionsChange}</span>
                 </div>
               </div>
             </Card>
@@ -148,10 +176,10 @@ export const OverviewPage: React.FC = () => {
               </div>
               <div className="mt-3">
                 <div className="text-2xl font-bold text-slate-900">
-                  {formatCurrency(DEMO_DASHBOARD_METRICS.revenueReceived)}
+                  {formatCurrency(Number(metrics.revenueReceived))}
                 </div>
                 <div className="mt-1 text-xs text-slate-500">
-                  {DEMO_DASHBOARD_METRICS.revenueReceivedPeriod}
+                  {metrics.revenueReceivedPeriod}
                 </div>
               </div>
             </Card>
@@ -168,10 +196,10 @@ export const OverviewPage: React.FC = () => {
               </div>
               <div className="mt-3">
                 <div className="text-2xl font-bold text-slate-900">
-                  {formatCurrency(DEMO_DASHBOARD_METRICS.outstandingBalance)}
+                  {formatCurrency(Number(metrics.outstandingBalance))}
                 </div>
                 <div className="mt-1 text-xs text-slate-500">
-                  Across {DEMO_DASHBOARD_METRICS.outstandingInvoicesCount} pending invoices
+                  Across {metrics.outstandingInvoicesCount} pending invoices
                 </div>
               </div>
             </Card>
@@ -188,10 +216,10 @@ export const OverviewPage: React.FC = () => {
               </div>
               <div className="mt-3">
                 <div className="text-2xl font-bold text-rose-600">
-                  {DEMO_DASHBOARD_METRICS.overdueInvoices}
+                  {metrics.overdueInvoices}
                 </div>
                 <div className="mt-1 text-xs text-rose-500 font-medium">
-                  {formatCurrency(DEMO_DASHBOARD_METRICS.overdueAmount)} requiring follow-up
+                  {formatCurrency(Number(metrics.overdueAmount))} requiring follow-up
                 </div>
               </div>
             </Card>
@@ -204,11 +232,6 @@ export const OverviewPage: React.FC = () => {
               <Card
                 title="Recent Invoices"
                 description="Latest recurring and ad-hoc billing statements."
-                action={
-                  <Button variant="ghost" size="sm" icon={<Filter className="w-3.5 h-3.5" />}>
-                    Filter
-                  </Button>
-                }
                 noPadding
               >
                 <div className="overflow-x-auto">
@@ -224,28 +247,38 @@ export const OverviewPage: React.FC = () => {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                      {DEMO_RECENT_INVOICES.map((inv) => (
-                        <tr key={inv.id} className="hover:bg-slate-50/80 transition-colors">
-                          <td className="py-3 px-4 font-mono font-medium text-slate-900">
-                            {inv.invoiceNumber}
-                          </td>
-                          <td className="py-3 px-4 font-medium text-slate-800">
-                            {inv.customerName}
-                          </td>
-                          <td className="py-3 px-4">{getInvoiceStatusBadge(inv.status)}</td>
-                          <td className="py-3 px-4 text-slate-500">{inv.dueDate}</td>
-                          <td className="py-3 px-4 text-right font-medium text-slate-900">
-                            {formatCurrency(inv.totalAmount)}
-                          </td>
-                          <td className="py-3 px-4 text-right font-semibold text-slate-700">
-                            {inv.balanceDue > 0 ? (
-                              <span className="text-amber-600">{formatCurrency(inv.balanceDue)}</span>
-                            ) : (
-                              <span className="text-slate-400">$0.00</span>
-                            )}
+                      {recentInvoices.length > 0 ? (
+                        recentInvoices.map((inv) => (
+                          <tr key={inv.id} className="hover:bg-slate-50/80 transition-colors">
+                            <td className="py-3 px-4 font-mono font-medium text-slate-900">
+                              {inv.invoiceNumber}
+                            </td>
+                            <td className="py-3 px-4 font-medium text-slate-800">
+                              {inv.customerName}
+                            </td>
+                            <td className="py-3 px-4">{getInvoiceStatusBadge(inv.status)}</td>
+                            <td className="py-3 px-4 text-slate-500">
+                              {inv.dueDate ? inv.dueDate.substring(0, 10) : '—'}
+                            </td>
+                            <td className="py-3 px-4 text-right font-medium text-slate-900 font-mono">
+                              {formatCurrency(Number(inv.totalAmount))}
+                            </td>
+                            <td className="py-3 px-4 text-right font-semibold text-slate-700 font-mono">
+                              {Number(inv.balanceDue) > 0 ? (
+                                <span className="text-amber-600">{formatCurrency(Number(inv.balanceDue))}</span>
+                              ) : (
+                                <span className="text-emerald-600">$0.00</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan={6} className="py-8 text-center text-slate-400">
+                            No recent invoices recorded yet.
                           </td>
                         </tr>
-                      ))}
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -260,37 +293,34 @@ export const OverviewPage: React.FC = () => {
                 noPadding
               >
                 <div className="divide-y divide-slate-100">
-                  {DEMO_RECENT_SUBSCRIPTIONS.map((sub) => (
-                    <div key={sub.id} className="p-4 hover:bg-slate-50/80 transition-colors">
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <p className="text-xs font-semibold text-slate-900">{sub.customerName}</p>
-                          <p className="text-[11px] text-slate-500 font-medium mt-0.5">{sub.planName}</p>
+                  {recentSubscriptions.length > 0 ? (
+                    recentSubscriptions.map((sub: any) => (
+                      <div key={sub.id} className="p-4 hover:bg-slate-50/80 transition-colors">
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <p className="text-xs font-semibold text-slate-900">{sub.customerName}</p>
+                            <p className="text-[11px] text-slate-500 font-medium mt-0.5">{sub.planName}</p>
+                          </div>
+                          {getSubStatusBadge(sub.status)}
                         </div>
-                        {getSubStatusBadge(sub.status)}
+                        <div className="mt-2 flex items-center justify-between text-[11px] text-slate-500">
+                          <span className="font-mono text-slate-400">{sub.subscriptionNumber}</span>
+                          <span className="font-semibold text-slate-800 font-mono">
+                            {formatCurrency(Number(sub.recurringAmount || sub.totalRecurringAmount || 0))} / cycle
+                          </span>
+                        </div>
                       </div>
-                      <div className="mt-2 flex items-center justify-between text-[11px] text-slate-500">
-                        <span className="font-mono text-slate-400">{sub.subscriptionNumber}</span>
-                        <span className="font-semibold text-slate-800">
-                          {formatCurrency(sub.recurringAmount)} / cycle
-                        </span>
-                      </div>
+                    ))
+                  ) : (
+                    <div className="p-8 text-center text-slate-400 text-xs">
+                      No subscriptions created yet.
                     </div>
-                  ))}
+                  )}
                 </div>
               </Card>
             </div>
           </div>
         </>
-      ) : (
-        /* Empty State */
-        <EmptyState
-          icon={<FileSpreadsheet className="w-6 h-6 text-slate-400" />}
-          title="No live business data connected yet"
-          description="In Stage 2, the app shell is verified with clean isolated sample data. Once the MySQL database connection and backend API endpoints are configured in Stage 3, live metrics and invoices will populate here automatically."
-          actionLabel="Switch to Demo Preview"
-          onAction={() => setShowDemoData(true)}
-        />
       )}
     </div>
   );

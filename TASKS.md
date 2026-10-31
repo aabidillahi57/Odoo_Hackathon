@@ -215,17 +215,41 @@ This checklist tracks the implementation progress for the Brightloop Subscriptio
 
 ---
 
-### Phase 8: Payments Recording & Finance Dashboard
-- [ ] Payments backend endpoints:
-  - [ ] Record payment (payment method, amount, date, transaction reference, note)
-  - [ ] Automatic invoice balance update (reconcile `amount_paid` and `balance_due`)
-  - [ ] Automatic invoice status transition to `Paid` upon zero balance
-- [ ] Finance Reporting Dashboard:
-  - [ ] Active subscriptions counter & ARR/MRR metrics
-  - [ ] Total revenue collected vs. total outstanding receivables
-  - [ ] Overdue invoices breakdown with aging indicator
-  - [ ] Filterable reports by date range, customer, and status
-- [ ] Query optimization for fast dashboard load times under high data volume
+### Phase 8: Discount Rules, Automatic Discount Application, Payments & Reconciliation — **Completed**
+- [x] **Database Schema & Migrations**:
+  - [x] `payment_sequences` table for concurrency-safe atomic sequence tracking (`PAY-YYYY-XXXX`)
+  - [x] Schema extensions in `discounts` (`name`, `archived_at`), `discount_usages` (`status` ENUM('reserved', 'redeemed', 'released'), `released_at`), and `payments` (`status` ENUM('completed', 'voided'), `recorded_by`, `voided_at`, `voided_by`, `void_reason`)
+  - [x] Repeatable migration `005_discounts_payments.sql`, updated `schema.sql`, seed data in `seed.sql`, and incremental migrations in `scripts/migrate.js`
+- [x] **Concurrency-Safe Payment Sequence Number Generator**:
+  - [x] Server-side atomic number generator (`PAY-YYYY-XXXX`) using database row-level locking (`FOR UPDATE`) in active transaction
+  - [x] Strict persistence: numbers are never reused upon voiding or reversal
+- [x] **Discount Rules Management** (`netlify/functions/discounts.ts`):
+  - [x] Admin-only CRUD and archiving endpoints (`GET /api/discounts`, `POST /api/discounts`, `PUT /api/discounts/:id`, `POST /api/discounts/:id/archive`)
+  - [x] Staff view-only access; Customers blocked with 403 Forbidden
+  - [x] Server-side validation: positive values, percentage $\le$ 100%, non-negative minimums, product existence
+- [x] **Automatic Discount Engine & Quota Lifecycle** (`netlify/functions/_shared/discount-engine.ts`):
+  - [x] Authoritative server-side evaluation: checks validity dates, active status, product vs order scope, minimum spend and quantity thresholds, and max usage limits
+  - [x] Non-stacking deterministic rule: selects eligible discount yielding greatest dollar savings; ties broken by highest rule ID
+  - [x] Pre-tax calculation order: discount deducted from pre-tax subtotal before tax computation
+  - [x] Quota lifecycle: Draft invoice reserves usage slot; Confirming redeems usage; Cancelling releases usage and restores quota
+  - [x] Seamless integration into automated recurring billing runs (`netlify/functions/billing-run.ts`) and manual invoice creation (`netlify/functions/invoices.ts`)
+- [x] **Manual Payment Recording & Authoritative Reconciliation** (`netlify/functions/payments.ts`):
+  - [x] Endpoints `GET /api/payments`, `POST /api/payments`, `POST /api/payments/:id/void`
+  - [x] Overpayment protection: rejects payment amounts exceeding invoice balance due
+  - [x] Partial payment support: records partial collections, updates balance due, retains `confirmed` status
+  - [x] Zero-balance auto-transition: automatically transitions invoice to `paid` when balance due reaches zero
+  - [x] Audited payment voiding: requires reason, restores invoice balance, reverts status from `paid` to `confirmed`
+  - [x] Authoritative reconciliation function `reconcileInvoiceBalance()` computing `SUM(amount)` over active completed payments
+- [x] **Live Executive Metrics & Finance Reporting** (`netlify/functions/dashboard.ts`):
+  - [x] Endpoint `GET /api/dashboard/metrics` computing live MySQL aggregates: active subscriptions count, total revenue collected, outstanding receivables, overdue amounts, and recent activity
+- [x] **Frontend User Interfaces**:
+  - [x] `DiscountsPage` (`/discounts`): Live DB list, status tabs, search, Admin create/edit modal with full field validation, remaining quota display, archive action
+  - [x] `PaymentsPage` (`/payments`): Live ledger, method/status filters, "Record Payment" modal with invoice selector and balance check, audited Void modal
+  - [x] `InvoicesPage` (`/invoices`): Payment transactions table inside invoice detail modal, "Record Payment" action button for confirmed invoices with balance due, applied discount badges
+  - [x] `CustomerPortalPage` (`/portal`): Live "My Payment Receipts" ledger strictly scoped to authenticated customer
+  - [x] `OverviewPage` (`/`): Live Executive Overview connected to database metrics with toggleable demo sandbox mode
+- [x] **TypeScript Build**:
+  - [x] Production build passes cleanly with zero errors (`npm run build`)
 
 ---
 

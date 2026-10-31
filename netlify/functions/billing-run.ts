@@ -3,6 +3,7 @@ import { jsonSuccess, jsonError, handleOptions } from './_shared/response';
 import { getAuthenticatedUser } from './_shared/auth';
 import { generateInvoiceNumber } from './_shared/sequence';
 import { calculateBillingPeriodAndNextDate } from './_shared/lifecycle';
+import { evaluateBestDiscount, reserveDiscountUsage } from './_shared/discount-engine';
 
 function calculateDueDate(issueDateStr: string, paymentTerms: string): string {
   const parts = issueDateStr.split('-');
@@ -87,7 +88,7 @@ export async function handler(event: any) {
       SELECT 
         s.id, s.subscription_number, s.customer_id, s.plan_id, s.status,
         s.start_date, s.expiry_date, s.next_billing_date, s.payment_terms,
-        s.billing_interval, s.billing_interval_count, s.notes,
+        s.billing_interval, s.billing_interval_count, s.discount_id, s.notes,
         c.name AS customer_name, c.email AS customer_email,
         p.billing_interval AS plan_interval, p.billing_interval_count AS plan_interval_count
       FROM subscriptions s
@@ -186,41 +187,28 @@ export async function handler(event: any) {
         // Generate atomic, concurrency-safe invoice number INV-YYYY-XXXX
         const invoiceNumber = await generateInvoiceNumber(connection);
 
-        let subtotalAmount = 0;
-        let taxAmount = 0;
-        const computedLines: any[] = [];
+        // Evaluate discounts deterministically with pre-tax application
+        const discountEval = await evaluateBestDiscount(connection, {
+          subscriptionId: sub.id,
+          customerId: sub.customer_id,
+          lines: lines.map((l: any) => ({
+            productId: l.product_id,
+            variantId: l.variant_id,
+            description: l.description,
+            quantity: l.quantity,
+            unitPrice: l.unit_price,
+            taxId: l.tax_id,
+            taxName: l.tax_name || l.current_tax_name,
+            taxRate: Number(l.tax_rate) || 0,
+          })),
+          asOfDate,
+          preferredDiscountId: sub.discount_id,
+        });
 
-        for (const line of lines) {
-          const qty = Number(line.quantity) || 1;
-          const unitPrice = Number(line.unit_price) || 0;
-          const taxRate = Number(line.tax_rate) || 0;
-          const taxName = line.tax_name || line.current_tax_name || (taxRate > 0 ? `Tax ${taxRate}%` : 'Standard');
-
-          const lineSubtotal = Math.round(qty * unitPrice * 100) / 100;
-          const lineTax = Math.round(lineSubtotal * (taxRate / 100) * 100) / 100;
-          const lineTotal = Math.round((lineSubtotal + lineTax) * 100) / 100;
-
-          subtotalAmount += lineSubtotal;
-          taxAmount += lineTax;
-
-          computedLines.push({
-            productId: line.product_id,
-            variantId: line.variant_id,
-            description: line.description || 'Subscription Line Item',
-            quantity: qty,
-            unitPrice: unitPrice.toFixed(2),
-            taxId: line.tax_id,
-            taxName,
-            taxRate: taxRate.toFixed(2),
-            taxAmount: lineTax.toFixed(2),
-            subtotalAmount: lineSubtotal.toFixed(2),
-            totalAmount: lineTotal.toFixed(2),
-          });
-        }
-
-        subtotalAmount = Math.round(subtotalAmount * 100) / 100;
-        taxAmount = Math.round(taxAmount * 100) / 100;
-        const totalAmount = Math.round((subtotalAmount + taxAmount) * 100) / 100;
+        const subtotalAmount = discountEval.subtotalAmount;
+        const discountAmount = discountEval.totalDiscountAmount;
+        const taxAmount = discountEval.taxAmount;
+        const totalAmount = discountEval.totalAmount;
 
         const paymentTerms = sub.payment_terms || 'Immediate Payment';
         const dueDate = calculateDueDate(asOfDate, paymentTerms);
@@ -232,7 +220,7 @@ export async function handler(event: any) {
             billing_period_start, billing_period_end, issue_date, due_date,
             payment_terms, subtotal_amount, tax_amount, discount_amount, total_amount,
             amount_paid, balance_due, notes, confirmed_at, created_by, created_at, updated_at
-          ) VALUES (?, ?, ?, 'confirmed', ?, ?, ?, ?, ?, ?, ?, 0.00, ?, 0.00, ?, ?, NOW(), ?, NOW(), NOW());`,
+          ) VALUES (?, ?, ?, 'confirmed', ?, ?, ?, ?, ?, ?, ?, ?, ?, 0.00, ?, ?, NOW(), ?, NOW(), NOW());`,
           [
             invoiceNumber,
             sub.id,
@@ -244,9 +232,12 @@ export async function handler(event: any) {
             paymentTerms,
             subtotalAmount.toFixed(2),
             taxAmount.toFixed(2),
+            discountAmount.toFixed(2),
             totalAmount.toFixed(2),
             totalAmount.toFixed(2),
-            `Automated recurring billing run for period ${periodStart} to ${periodEnd}`,
+            `Automated recurring billing run for period ${periodStart} to ${periodEnd}${
+              discountEval.discountCode ? ` (Discount: ${discountEval.discountCode})` : ''
+            }`,
             currentUser.id,
           ]
         );
@@ -254,28 +245,41 @@ export async function handler(event: any) {
         const newInvoiceId = invResult.insertId;
 
         // Insert invoice line items
-        for (const cl of computedLines) {
+        for (const cl of discountEval.lines) {
           await connection.query(
             `INSERT INTO invoice_lines (
               invoice_id, product_id, variant_id, description, quantity,
               unit_price, tax_id, tax_name, tax_rate, tax_amount, discount_amount,
               subtotal_amount, total_amount, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0.00, ?, ?, NOW());`,
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW());`,
             [
               newInvoiceId,
               cl.productId,
               cl.variantId,
               cl.description,
               cl.quantity,
-              cl.unitPrice,
+              cl.unitPrice.toFixed(2),
               cl.taxId,
               cl.taxName,
-              cl.taxRate,
-              cl.taxAmount,
-              cl.subtotalAmount,
-              cl.totalAmount,
+              cl.taxRate.toFixed(2),
+              cl.taxAmount.toFixed(2),
+              cl.discountAmount.toFixed(2),
+              cl.subtotalAmount.toFixed(2),
+              cl.totalAmount.toFixed(2),
             ]
           );
+        }
+
+        // Record discount usage if a discount was applied
+        if (discountEval.discountId && discountEval.totalDiscountAmount > 0) {
+          await reserveDiscountUsage(connection, {
+            discountId: discountEval.discountId,
+            invoiceId: newInvoiceId,
+            customerId: sub.customer_id,
+            subscriptionId: sub.id,
+            amountApplied: discountEval.totalDiscountAmount,
+            immediateRedeem: true,
+          });
         }
 
         // Advance next_billing_date only after invoice creation succeeds
@@ -296,6 +300,8 @@ export async function handler(event: any) {
           invoiceNumber,
           period: `${periodStart} to ${periodEnd}`,
           amount: totalAmount,
+          discountAmount,
+          discountCode: discountEval.discountCode,
           nextBillingDate,
           status: 'created',
         });

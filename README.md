@@ -526,6 +526,63 @@ The recurring billing engine calculates the active billing period `[periodStart,
 
 ---
 
+## Discounts, Automatic Discount Application & Payment Reconciliation (Part 8)
+
+### 1. Concurrency-Safe Payment Sequence Numbering
+- **Format:** `PAY-YYYY-XXXX` (e.g. `PAY-2026-0001`, `PAY-2026-0002`).
+- **Generation Strategy:** Server-side atomic generator using MySQL table `payment_sequences (sequence_year, last_number)`.
+- **Atomic Concurrency Protection:** Employs row-level locking (`SELECT ... FOR UPDATE`) within an active MySQL transaction.
+- **Strict Persistence:** Numbers are permanently consumed; voiding or reversing a payment never causes number reuse.
+
+### 2. Discount Rules Data Model & RBAC
+- **Admin Only:** Only users with role `admin` can create, update, or archive discount rules (`/api/discounts`).
+- **Staff Access:** Users with role `staff` have read-only access to view active discount rules.
+- **Customer Access:** Customers cannot browse or view discount rules (enforced with `403 Forbidden` on backend).
+- **Rule Attributes:**
+  - `code`: Unique uppercase identifier (e.g., `SUMMER2026`).
+  - `discount_type`: `fixed` dollar amount or `percentage`.
+  - `value`: Strictly positive number; percentages validated $\le 100\%$.
+  - `applies_to`: `order` (entire subscription) or `product` (specific product line).
+  - `min_purchase_amount` & `min_quantity`: Minimum subtotal spend and item thresholds required for eligibility.
+  - `start_date` & `end_date`: Optional promotion validity window.
+  - `max_uses` & `used_count`: Usage quota caps with remaining quota tracking.
+  - `is_active` & `is_archived`: Lifecycle states preventing deactivated or archived rules from being evaluated.
+
+### 3. Automatic Discount Application Engine
+- **Server Authoritative:** Discounts are calculated exclusively on the server in `netlify/functions/_shared/discount-engine.ts`. The server never trusts discount amounts or invoice totals supplied by the client.
+- **Calculation Order (Pre-Tax):**
+  Discounts are applied directly to pre-tax unit prices:
+  $$\text{Line Subtotal} = \text{round}(\text{Quantity} \times \text{Unit Price}, 2)$$
+  $$\text{Line Discount} = \text{round}(\text{Computed Discount Portion}, 2)$$
+  $$\text{Net Taxable Subtotal} = \max(0, \text{Line Subtotal} - \text{Line Discount})$$
+  $$\text{Line Tax} = \text{round}(\text{Net Taxable Subtotal} \times (\text{Tax Rate} / 100), 2)$$
+  $$\text{Line Total} = \text{Net Taxable Subtotal} + \text{Line Tax}$$
+  *Rationale:* Calculating sales tax on the net discounted subtotal ensures customers are not taxed on money they did not pay.
+- **Non-Stacking Policy:** Disallows stacking. The engine evaluates all eligible active discount rules and deterministically selects the rule yielding the **greatest dollar savings**. Ties are broken by highest rule ID (newest rule).
+- **Quota Lifecycle (Reserve, Redeem, Release):**
+  - **Reserve:** When a Draft invoice is created, the system locks the rule row with `FOR UPDATE`, validates available quota, increments `used_count`, and creates a `discount_usages` record with status `reserved`.
+  - **Redeem:** When the invoice is confirmed, the reservation is marked as `redeemed`.
+  - **Release:** If an unpaid or Draft invoice is cancelled, the usage record is marked `released`, and the discount rule's `used_count` is decremented by 1, safely restoring the quota for future use.
+
+### 4. Manual Payment Recording & Authoritative Reconciliation
+- **Overpayment Prevention:** Payments exceeding the invoice balance due are strictly rejected by the server (`OVERPAYMENT_EXCEEDS_BALANCE`).
+- **Partial Payments:** Supports partial payments. The invoice remains in `confirmed` status with an updated `amount_paid` and `balance_due`.
+- **Zero-Balance Auto-Transition:** When a recorded payment reduces the `balance_due` to 0, the invoice status automatically updates to `paid`.
+- **Audited Voiding & Reversal:** Staff and Admins can void payments with a required audit reason. Voiding re-calculates the invoice balance due from the remaining valid payments and automatically reverts the invoice status from `paid` back to `confirmed`.
+- **Authoritative Balance Reconciliation:** The helper `reconcileInvoiceBalance(connection, invoiceId)` computes:
+  $$\text{amount\_paid} = \sum_{\text{status='completed'}} \text{payment.amount}$$
+  $$\text{balance\_due} = \max(0, \text{total\_amount} - \text{amount\_paid})$$
+
+### 5. Live Finance Reporting Dashboard
+- **Direct Database Query:** `GET /api/dashboard/metrics` executes server-side SQL queries to aggregate real-time figures:
+  - Active Subscriptions count and velocity change
+  - Revenue Received (sum of completed payments)
+  - Outstanding Balance (sum of balance due across confirmed invoices)
+  - Overdue Invoices count and overdue dollar volume
+  - Recent Invoices and Subscriptions tables
+
+---
+
 ## Project Roadmap & Next Steps
 
 See [`TASKS.md`](file:///Users/harshthakur/Odoo_Hackathon/TASKS.md) for the detailed step-by-step implementation checklist.
@@ -538,8 +595,9 @@ See [`TASKS.md`](file:///Users/harshthakur/Odoo_Hackathon/TASKS.md) for the deta
 - Phase 5: Customers & Quotation Templates (Issuance Dependencies)
 - Phase 6: Subscriptions & Lifecycle State Machine
 - Phase 7: Tax Rules, Invoicing & Recurring Billing Engine
+- Phase 8: Discount Rules, Automatic Discount Application, Payments & Reconciliation
 
-**Next Step (Phase 8): Payments Recording, Collections & Finance Dashboard**
-- Payment collection recording (`POST /api/payments`) with methods (credit card, bank transfer, cash)
-- Automatic reconciliation of `amount_paid`, `balance_due`, and transition to `Paid` status
-- Finance Dashboard with ARR/MRR metrics, outstanding receivables, and aging indicators
+**Next Steps (Phase 9 - 11):**
+- Phase 9: Extended Customer Self-Service Portal Enhancements
+- Phase 10: Brevo Email Integration & User Experience Polish
+- Phase 11: Production Verification & Cloud Deployment

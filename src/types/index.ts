@@ -269,6 +269,17 @@ export interface Invoice {
   createdAt?: string;
   updatedAt?: string;
   lines?: InvoiceLine[];
+  payments?: Payment[];
+  discountUsage?: {
+    id: number;
+    discountId: number;
+    code: string;
+    name?: string;
+    discountType: DiscountType;
+    value: number;
+    amountApplied: number;
+    status: 'reserved' | 'redeemed' | 'released';
+  } | null;
 }
 
 export interface BillingRunResultDetail {
@@ -297,17 +308,32 @@ export interface BillingRunSummary {
 }
 
 export type PaymentMethod = 'credit_card' | 'bank_transfer' | 'cash' | 'other';
+export type PaymentStatus = 'completed' | 'voided';
 
 export interface Payment {
   id: number;
   paymentNumber: string;
   invoiceId: number;
   invoiceNumber: string;
+  customerId?: number;
   customerName: string;
+  customerEmail?: string | null;
   amount: number;
   paymentMethod: PaymentMethod;
   paymentDate: string;
-  transactionReference?: string;
+  transactionReference?: string | null;
+  status?: PaymentStatus;
+  notes?: string | null;
+  recordedBy?: number | null;
+  recordedByName?: string | null;
+  voidedAt?: string | null;
+  voidedBy?: number | null;
+  voidedByName?: string | null;
+  voidReason?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+  invoiceTotal?: number;
+  invoiceBalanceDue?: number;
 }
 
 export type DiscountType = 'fixed' | 'percentage';
@@ -315,14 +341,26 @@ export type DiscountType = 'fixed' | 'percentage';
 export interface Discount {
   id: number;
   code: string;
+  name?: string;
   description?: string;
   discountType: DiscountType;
   value: number;
   minPurchaseAmount: number;
+  minQuantity?: number;
+  startDate?: string | null;
+  endDate?: string | null;
+  maxUses?: number | null;
   usedCount: number;
-  maxUses?: number;
   appliesTo: 'order' | 'product';
+  applicableProductId?: number | null;
+  applicableProductName?: string | null;
+  applicableVariantId?: number | null;
   isActive: boolean;
+  isArchived?: boolean;
+  archivedAt?: string | null;
+  remainingUses?: number | null;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface DashboardMetrics {
@@ -334,4 +372,10 @@ export interface DashboardMetrics {
   outstandingInvoicesCount: number;
   overdueInvoices: number;
   overdueAmount: number;
+}
+
+export interface DashboardData {
+  metrics: DashboardMetrics;
+  recentInvoices: Invoice[];
+  recentSubscriptions: any[];
 }

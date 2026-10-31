@@ -48,8 +48,38 @@
   status = 200
 
 # =============================================================================
-# Subscription, Invoice & Billing API Routes
+# Subscription, Invoice, Discount, Payment & Billing API Routes
 # =============================================================================
+[[redirects]]
+  from = "/api/dashboard/metrics"
+  to = "/.netlify/functions/dashboard"
+  status = 200
+
+[[redirects]]
+  from = "/api/dashboard"
+  to = "/.netlify/functions/dashboard"
+  status = 200
+
+[[redirects]]
+  from = "/api/discounts"
+  to = "/.netlify/functions/discounts"
+  status = 200
+
+[[redirects]]
+  from = "/api/discounts/*"
+  to = "/.netlify/functions/discounts"
+  status = 200
+
+[[redirects]]
+  from = "/api/payments"
+  to = "/.netlify/functions/payments"
+  status = 200
+
+[[redirects]]
+  from = "/api/payments/*"
+  to = "/.netlify/functions/payments"
+  status = 200
+
 [[redirects]]
   from = "/api/billing/run"
   to = "/.netlify/functions/billing-run"

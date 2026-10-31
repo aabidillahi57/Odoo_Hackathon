@@ -147,3 +147,18 @@ VALUES
     (6, 3, 3, NULL, 'Dedicated Technical Account Manager (Partial)', 1, 500.00, 1, 'GST Standard', 18.00, 90.00, 500.00, 590.00)
 ON DUPLICATE KEY UPDATE unit_price=VALUES(unit_price);
 
+-- 13. Payment Sequences
+INSERT INTO payment_sequences (sequence_year, last_number)
+VALUES (2026, 1)
+ON DUPLICATE KEY UPDATE last_number=VALUES(last_number);
+
+-- 14. Payments
+INSERT INTO payments (
+    id, payment_number, invoice_id, customer_id, amount,
+    payment_method, payment_date, status, transaction_reference, notes
+)
+VALUES
+    (1, 'PAY-2026-0001', 1, 1, 6903.00, 'bank_transfer', '2026-01-15', 'completed', 'WIRE-ACME-2026-01', 'Annual enterprise payment received in full via wire transfer')
+ON DUPLICATE KEY UPDATE payment_number=VALUES(payment_number);
+
+

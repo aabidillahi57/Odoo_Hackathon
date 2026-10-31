@@ -3,6 +3,12 @@ import { jsonSuccess, jsonError, handleOptions } from './_shared/response';
 import { getAuthenticatedUser } from './_shared/auth';
 import { generateInvoiceNumber } from './_shared/sequence';
 import { sendInvoiceEmail } from './_shared/brevo';
+import {
+  evaluateBestDiscount,
+  reserveDiscountUsage,
+  redeemDiscountUsage,
+  releaseDiscountUsage,
+} from './_shared/discount-engine';
 
 function parseInvoicePath(path: string): { id?: number; action?: string } {
   const cleanPath = path.replace(/^(\/\.netlify\/functions|\/api)?\/invoices\/?/, '');
@@ -290,6 +296,51 @@ async function handleGetInvoiceDetail(invoiceId: number, currentUser: any, origi
     totalAmount: Number(l.total_amount),
   }));
 
+  // Fetch recorded payments for this invoice
+  const paymentRows: any = await executeQuery(
+    `SELECT p.id, p.payment_number, p.amount, p.payment_method, p.payment_date, p.status,
+            p.transaction_reference, p.notes, p.created_at, p.voided_at, p.void_reason,
+            u.first_name AS recorded_by_name
+     FROM payments p
+     LEFT JOIN users u ON p.recorded_by = u.id
+     WHERE p.invoice_id = ?
+     ORDER BY p.payment_date DESC, p.id DESC;`,
+    [invoiceId]
+  );
+
+  const payments = paymentRows.map((p: any) => ({
+    id: p.id,
+    paymentNumber: p.payment_number,
+    amount: Number(p.amount),
+    paymentMethod: p.payment_method,
+    paymentDate: p.payment_date ? (p.payment_date.toISOString?.().split('T')[0] || String(p.payment_date).split('T')[0]) : '',
+    status: p.status,
+    transactionReference: p.transaction_reference || null,
+    notes: p.notes || '',
+    recordedByName: p.recorded_by_name || null,
+    voidedAt: p.voided_at || null,
+    voidReason: p.void_reason || null,
+    createdAt: p.created_at,
+  }));
+
+  // Fetch applied discount usage if any
+  const discountRows: any = await executeQuery(
+    `SELECT du.id, du.amount_applied, du.status, d.code, d.name, d.discount_type, d.value
+     FROM discount_usages du
+     JOIN discounts d ON du.discount_id = d.id
+     WHERE du.invoice_id = ? AND du.status IN ('reserved', 'redeemed');`,
+    [invoiceId]
+  );
+  const discountUsage = discountRows.length > 0 ? {
+    id: discountRows[0].id,
+    amountApplied: Number(discountRows[0].amount_applied),
+    status: discountRows[0].status,
+    code: discountRows[0].code,
+    name: discountRows[0].name || discountRows[0].code,
+    discountType: discountRows[0].discount_type,
+    value: Number(discountRows[0].value),
+  } : null;
+
   const todayStr = new Date().toISOString().split('T')[0];
   const dueDateStr = inv.due_date ? (inv.due_date.toISOString?.().split('T')[0] || String(inv.due_date).split('T')[0]) : '';
   const isOverdue = inv.status !== 'paid' && inv.status !== 'cancelled' && Number(inv.balance_due) > 0 && dueDateStr < todayStr;
@@ -336,6 +387,8 @@ async function handleGetInvoiceDetail(invoiceId: number, currentUser: any, origi
     createdAt: inv.created_at,
     updatedAt: inv.updated_at,
     lines,
+    payments,
+    discountUsage,
   };
 
   return jsonSuccess({ invoice }, undefined, 200, {}, origin);
@@ -349,22 +402,40 @@ async function handleConfirmInvoice(invoiceId: number, currentUser: any, origin?
     return jsonError('Permission denied. Customers cannot confirm invoices.', 403, 'FORBIDDEN', {}, origin);
   }
 
-  const rows: any = await executeQuery('SELECT id, status, invoice_number FROM invoices WHERE id = ?;', [invoiceId]);
-  if (!rows || rows.length === 0) {
-    return jsonError(`Invoice #${invoiceId} not found.`, 404, 'INVOICE_NOT_FOUND', {}, origin);
+  const pool = getDbPool();
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const [rows]: any = await conn.query('SELECT id, status, invoice_number FROM invoices WHERE id = ? FOR UPDATE;', [invoiceId]);
+    if (!rows || rows.length === 0) {
+      await conn.rollback();
+      return jsonError(`Invoice #${invoiceId} not found.`, 404, 'INVOICE_NOT_FOUND', {}, origin);
+    }
+
+    const inv = rows[0];
+    if (inv.status !== 'draft') {
+      await conn.rollback();
+      return jsonError(`Cannot confirm invoice ${inv.invoice_number}; it is currently in '${inv.status}' status.`, 400, 'INVALID_TRANSITION', {}, origin);
+    }
+
+    await conn.query(
+      "UPDATE invoices SET status = 'confirmed', confirmed_at = NOW(), updated_at = NOW() WHERE id = ?;",
+      [invoiceId]
+    );
+
+    // Redeem reserved discount usage
+    await redeemDiscountUsage(conn, invoiceId);
+
+    await conn.commit();
+    return jsonSuccess({ message: `Invoice ${inv.invoice_number} has been confirmed.`, status: 'confirmed' }, undefined, 200, {}, origin);
+  } catch (err: any) {
+    await conn.rollback();
+    console.error('Error confirming invoice:', err);
+    return jsonError('Failed to confirm invoice.', 500, 'CONFIRMATION_FAILED', { details: err.message }, origin);
+  } finally {
+    conn.release();
   }
-
-  const inv = rows[0];
-  if (inv.status !== 'draft') {
-    return jsonError(`Cannot confirm invoice ${inv.invoice_number}; it is currently in '${inv.status}' status.`, 400, 'INVALID_TRANSITION', {}, origin);
-  }
-
-  await executeQuery(
-    "UPDATE invoices SET status = 'confirmed', confirmed_at = NOW(), updated_at = NOW() WHERE id = ?;",
-    [invoiceId]
-  );
-
-  return jsonSuccess({ message: `Invoice ${inv.invoice_number} has been confirmed.`, status: 'confirmed' }, undefined, 200, {}, origin);
 }
 
 /**
@@ -387,32 +458,51 @@ async function handleCancelInvoice(invoiceId: number, event: any, currentUser: a
     return jsonError('A cancellation reason is required to cancel an issued invoice.', 400, 'VALIDATION_ERROR', { field: 'reason' }, origin);
   }
 
-  const rows: any = await executeQuery('SELECT id, status, invoice_number, amount_paid FROM invoices WHERE id = ?;', [invoiceId]);
-  if (!rows || rows.length === 0) {
-    return jsonError(`Invoice #${invoiceId} not found.`, 404, 'INVOICE_NOT_FOUND', {}, origin);
-  }
+  const pool = getDbPool();
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
 
-  const inv = rows[0];
-  if (inv.status === 'cancelled') {
-    return jsonError(`Invoice ${inv.invoice_number} is already cancelled.`, 400, 'ALREADY_CANCELLED', {}, origin);
-  }
+    const [rows]: any = await conn.query('SELECT id, status, invoice_number, amount_paid FROM invoices WHERE id = ? FOR UPDATE;', [invoiceId]);
+    if (!rows || rows.length === 0) {
+      await conn.rollback();
+      return jsonError(`Invoice #${invoiceId} not found.`, 404, 'INVOICE_NOT_FOUND', {}, origin);
+    }
 
-  if (Number(inv.amount_paid) > 0) {
-    return jsonError(
-      `Invoice ${inv.invoice_number} cannot be cancelled because payments totaling $${Number(inv.amount_paid).toFixed(2)} have already been collected against it.`,
-      400,
-      'HAS_PAYMENTS',
-      {},
-      origin
+    const inv = rows[0];
+    if (inv.status === 'cancelled') {
+      await conn.rollback();
+      return jsonError(`Invoice ${inv.invoice_number} is already cancelled.`, 400, 'ALREADY_CANCELLED', {}, origin);
+    }
+
+    if (Number(inv.amount_paid) > 0) {
+      await conn.rollback();
+      return jsonError(
+        `Invoice ${inv.invoice_number} cannot be cancelled because payments totaling $${Number(inv.amount_paid).toFixed(2)} have already been collected against it.`,
+        400,
+        'HAS_PAYMENTS',
+        {},
+        origin
+      );
+    }
+
+    await conn.query(
+      "UPDATE invoices SET status = 'cancelled', cancellation_reason = ?, cancelled_at = NOW(), updated_at = NOW() WHERE id = ?;",
+      [reason, invoiceId]
     );
+
+    // Release any reserved or redeemed discount usage and restore rule quota
+    await releaseDiscountUsage(conn, invoiceId);
+
+    await conn.commit();
+    return jsonSuccess({ message: `Invoice ${inv.invoice_number} cancelled successfully.`, status: 'cancelled' }, undefined, 200, {}, origin);
+  } catch (err: any) {
+    await conn.rollback();
+    console.error('Error cancelling invoice:', err);
+    return jsonError('Failed to cancel invoice.', 500, 'CANCELLATION_FAILED', { details: err.message }, origin);
+  } finally {
+    conn.release();
   }
-
-  await executeQuery(
-    "UPDATE invoices SET status = 'cancelled', cancellation_reason = ?, cancelled_at = NOW(), updated_at = NOW() WHERE id = ?;",
-    [reason, invoiceId]
-  );
-
-  return jsonSuccess({ message: `Invoice ${inv.invoice_number} cancelled successfully.`, status: 'cancelled' }, undefined, 200, {}, origin);
 }
 
 /**
@@ -541,46 +631,34 @@ async function handleCreateManualInvoice(event: any, currentUser: any, origin?: 
 
     const invoiceNumber = await generateInvoiceNumber(connection);
 
-    let subtotalAmount = 0;
-    let taxAmount = 0;
-    const computedLines: any[] = [];
+    // Evaluate discounts deterministically with pre-tax application
+    const discountEval = await evaluateBestDiscount(connection, {
+      customerId,
+      subscriptionId,
+      lines: lines.map((item: any) => {
+        const productId = parseInt(item.productId, 10);
+        if (!productId || isNaN(productId)) {
+          throw new Error('Each line must specify a valid productId.');
+        }
+        return {
+          productId,
+          variantId: item.variantId ? parseInt(item.variantId, 10) : null,
+          description: item.description ? String(item.description).trim() : 'Invoice Line Item',
+          quantity: Math.max(parseInt(item.quantity, 10) || 1, 1),
+          unitPrice: Math.max(Number(item.unitPrice) || 0, 0),
+          taxId: item.taxId ? parseInt(item.taxId, 10) : null,
+          taxName: item.taxName,
+          taxRate: Number(item.taxRate) || 0,
+        };
+      }),
+      asOfDate: issueDate,
+      preferredDiscountId: body.discountId ? parseInt(body.discountId, 10) : null,
+    });
 
-    for (const item of lines) {
-      const productId = parseInt(item.productId, 10);
-      if (!productId || isNaN(productId)) {
-        throw new Error('Each line must specify a valid productId.');
-      }
-
-      const qty = Math.max(parseInt(item.quantity, 10) || 1, 1);
-      const unitPrice = Math.max(Number(item.unitPrice) || 0, 0);
-      const taxRate = Number(item.taxRate) || 0;
-      const taxName = item.taxName ? String(item.taxName).trim() : (taxRate > 0 ? `Tax ${taxRate}%` : 'Standard');
-
-      const lineSubtotal = Math.round(qty * unitPrice * 100) / 100;
-      const lineTax = Math.round(lineSubtotal * (taxRate / 100) * 100) / 100;
-      const lineTotal = Math.round((lineSubtotal + lineTax) * 100) / 100;
-
-      subtotalAmount += lineSubtotal;
-      taxAmount += lineTax;
-
-      computedLines.push({
-        productId,
-        variantId: item.variantId ? parseInt(item.variantId, 10) : null,
-        description: item.description ? String(item.description).trim() : 'Invoice Line Item',
-        quantity: qty,
-        unitPrice: unitPrice.toFixed(2),
-        taxId: item.taxId ? parseInt(item.taxId, 10) : null,
-        taxName,
-        taxRate: taxRate.toFixed(2),
-        taxAmount: lineTax.toFixed(2),
-        subtotalAmount: lineSubtotal.toFixed(2),
-        totalAmount: lineTotal.toFixed(2),
-      });
-    }
-
-    subtotalAmount = Math.round(subtotalAmount * 100) / 100;
-    taxAmount = Math.round(taxAmount * 100) / 100;
-    const totalAmount = Math.round((subtotalAmount + taxAmount) * 100) / 100;
+    const subtotalAmount = discountEval.subtotalAmount;
+    const discountAmount = discountEval.totalDiscountAmount;
+    const taxAmount = discountEval.taxAmount;
+    const totalAmount = discountEval.totalAmount;
 
     const [invResult]: any = await connection.query(
       `INSERT INTO invoices (
@@ -588,7 +666,7 @@ async function handleCreateManualInvoice(event: any, currentUser: any, origin?: 
         billing_period_start, billing_period_end, issue_date, due_date,
         payment_terms, subtotal_amount, tax_amount, discount_amount, total_amount,
         amount_paid, balance_due, notes, confirmed_at, created_by, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, 0.00, ?, 0.00, ?, ?, ?, ?, NOW(), NOW());`,
+      ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, 0.00, ?, ?, ?, ?, NOW(), NOW());`,
       [
         invoiceNumber,
         subscriptionId,
@@ -599,6 +677,7 @@ async function handleCreateManualInvoice(event: any, currentUser: any, origin?: 
         paymentTerms,
         subtotalAmount.toFixed(2),
         taxAmount.toFixed(2),
+        discountAmount.toFixed(2),
         totalAmount.toFixed(2),
         totalAmount.toFixed(2),
         notes,
@@ -609,28 +688,41 @@ async function handleCreateManualInvoice(event: any, currentUser: any, origin?: 
 
     const newInvoiceId = invResult.insertId;
 
-    for (const cl of computedLines) {
+    for (const cl of discountEval.lines) {
       await connection.query(
         `INSERT INTO invoice_lines (
           invoice_id, product_id, variant_id, description, quantity,
           unit_price, tax_id, tax_name, tax_rate, tax_amount, discount_amount,
           subtotal_amount, total_amount, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0.00, ?, ?, NOW());`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW());`,
         [
           newInvoiceId,
           cl.productId,
           cl.variantId,
           cl.description,
           cl.quantity,
-          cl.unitPrice,
+          cl.unitPrice.toFixed(2),
           cl.taxId,
           cl.taxName,
-          cl.taxRate,
-          cl.taxAmount,
-          cl.subtotalAmount,
-          cl.totalAmount,
+          cl.taxRate.toFixed(2),
+          cl.taxAmount.toFixed(2),
+          cl.discountAmount.toFixed(2),
+          cl.subtotalAmount.toFixed(2),
+          cl.totalAmount.toFixed(2),
         ]
       );
+    }
+
+    // Reserve or redeem discount usage slot
+    if (discountEval.discountId && discountEval.totalDiscountAmount > 0) {
+      await reserveDiscountUsage(connection, {
+        discountId: discountEval.discountId,
+        invoiceId: newInvoiceId,
+        customerId,
+        subscriptionId,
+        amountApplied: discountEval.totalDiscountAmount,
+        immediateRedeem: status === 'confirmed',
+      });
     }
 
     await connection.commit();
