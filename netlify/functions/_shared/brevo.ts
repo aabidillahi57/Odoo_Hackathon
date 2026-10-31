@@ -1,4 +1,7 @@
 import https from 'https';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 export interface SendPasswordResetParams {
   recipientEmail: string;
@@ -174,6 +177,8 @@ export async function sendPasswordResetEmail({
     req.end();
   });
 }
+
+
 
 export interface SendInvoiceEmailParams {
   recipientEmail: string;
@@ -419,3 +424,208 @@ export async function sendInvoiceEmail({
   });
 }
 
+
+
+
+/**
+ * Checks Brevo API connection and fetches authenticated account details
+ */
+export async function checkBrevoAccount(): Promise<{
+  success: boolean;
+  configured: boolean;
+  email?: string;
+  companyName?: string;
+  firstName?: string;
+  lastName?: string;
+  plan?: any[];
+  error?: string;
+}> {
+  if (!isBrevoConfigured()) {
+    return {
+      success: false,
+      configured: false,
+      error: 'Brevo API key is not configured or is a placeholder in .env.',
+    };
+  }
+
+  return new Promise((resolve) => {
+    const options = {
+      hostname: 'api.brevo.com',
+      port: 443,
+      path: '/v3/account',
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+        'api-key': process.env.BREVO_API_KEY as string,
+      },
+      timeout: 10000,
+    };
+
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => {
+        data += chunk;
+      });
+
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data);
+          if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+            resolve({
+              success: true,
+              configured: true,
+              email: parsed.email,
+              companyName: parsed.companyName,
+              firstName: parsed.firstName,
+              lastName: parsed.lastName,
+              plan: parsed.plan,
+            });
+          } else {
+            resolve({
+              success: false,
+              configured: true,
+              error: parsed.message || `Brevo API returned HTTP ${res.statusCode}`,
+            });
+          }
+        } catch (e: any) {
+          resolve({
+            success: false,
+            configured: true,
+            error: 'Failed to parse Brevo API response',
+          });
+        }
+      });
+    });
+
+    req.on('error', (err) => {
+      resolve({
+        success: false,
+        configured: true,
+        error: err.message || 'Network error reaching Brevo API',
+      });
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      resolve({
+        success: false,
+        configured: true,
+        error: 'Brevo API request timed out (10s)',
+      });
+    });
+
+    req.end();
+  });
+}
+
+/**
+ * Sends a live test email verifying Brevo transactional sending
+ */
+export async function sendTestBrevoEmail(recipientEmail: string): Promise<BrevoResult> {
+  if (!isBrevoConfigured()) {
+    return {
+      success: false,
+      devMode: true,
+      error: 'BREVO_NOT_CONFIGURED',
+    };
+  }
+
+  const senderEmail = process.env.BREVO_SENDER_EMAIL || 'billing@brightloopsoftware.example.com';
+  const senderName = process.env.BREVO_SENDER_NAME || 'Brightloop Software';
+
+  const payload = {
+    sender: {
+      name: senderName,
+      email: senderEmail,
+    },
+    to: [
+      {
+        email: recipientEmail,
+        name: 'Brightloop Administrator',
+      },
+    ],
+    subject: 'Brightloop Software — Brevo Connection Test Succeeded 🎉',
+    htmlContent: `
+      <!DOCTYPE html>
+      <html>
+      <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f8fafc; color: #1e293b; padding: 24px;">
+        <div style="max-width: 560px; margin: 0 auto; background: #ffffff; border-radius: 12px; border: 1px solid #e2e8f0; padding: 32px;">
+          <h2 style="color: #4f46e5; margin-top: 0;">🎉 Brevo Connection Verified!</h2>
+          <p>Hello,</p>
+          <p>This is a live transactional test email confirming that <strong>Brevo REST API v3</strong> has been successfully connected to your <strong>Brightloop Subscription Management System</strong>.</p>
+          <div style="background: #f1f5f9; padding: 16px; border-radius: 8px; margin: 20px 0; font-size: 13px;">
+            <div><strong>Sender:</strong> ${senderName} &lt;${senderEmail}&gt;</div>
+            <div><strong>Timestamp:</strong> ${new Date().toUTCString()}</div>
+            <div><strong>Engine:</strong> Brevo Transactional Email Engine (REST API v3)</div>
+          </div>
+          <p style="color: #64748b; font-size: 13px;">Password reset recovery links and customer invoice statements are configured to dispatch through this channel.</p>
+        </div>
+      </body>
+      </html>
+    `,
+  };
+
+  return new Promise((resolve) => {
+    const postData = JSON.stringify(payload);
+    const options = {
+      hostname: 'api.brevo.com',
+      port: 443,
+      path: '/v3/smtp/email',
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'api-key': process.env.BREVO_API_KEY as string,
+        'Content-Length': Buffer.byteLength(postData),
+      },
+      timeout: 10000,
+    };
+
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => {
+        data += chunk;
+      });
+
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data);
+          if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+            resolve({
+              success: true,
+              messageId: parsed.messageId,
+            });
+          } else {
+            resolve({
+              success: false,
+              error: parsed.message || `Brevo API error HTTP ${res.statusCode}`,
+            });
+          }
+        } catch (e: any) {
+          resolve({
+            success: false,
+            error: 'Failed to parse Brevo API response',
+          });
+        }
+      });
+    });
+
+    req.on('error', (err) => {
+      resolve({
+        success: false,
+        error: err.message || 'Network error reaching Brevo API',
+      });
+    });
+
+    req.on('timeout', () => {
+      req.destroy();
+      resolve({
+        success: false,
+        error: 'Brevo API request timed out (10s)',
+      });
+    });
+
+    req.write(postData);
+    req.end();
+  });
+}

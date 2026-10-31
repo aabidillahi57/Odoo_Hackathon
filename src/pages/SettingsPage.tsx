@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Settings, Shield, Mail, UserCheck, Plus, CheckCircle2, XCircle, ShieldAlert, Edit2, X } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Settings, Shield, Mail, UserCheck, Plus, CheckCircle2, XCircle, ShieldAlert, Edit2, X, Send, RefreshCw } from 'lucide-react';
 import { PageHeader } from '../components/common/PageHeader';
 import { Button } from '../components/common/Button';
 import { Card } from '../components/common/Card';
@@ -8,7 +8,7 @@ import { ErrorAlert } from '../components/common/ErrorAlert';
 import { LoadingSpinner } from '../components/common/LoadingSpinner';
 import { useAuth } from '../context/AuthContext';
 import { evaluatePasswordPolicy } from '../utils/passwordPolicy';
-import { useTaxes, createTax, updateTax } from '../services/api';
+import { useTaxes, createTax, updateTax, fetchBrevoStatus, sendBrevoTestEmail, BrevoStatusResponse } from '../services/api';
 import { Tax } from '../types';
 
 export const SettingsPage: React.FC = () => {
@@ -28,6 +28,58 @@ export const SettingsPage: React.FC = () => {
   const [isSavingTax, setIsSavingTax] = useState(false);
   const [taxActionError, setTaxActionError] = useState<string | null>(null);
   const [taxActionSuccess, setTaxActionSuccess] = useState<string | null>(null);
+
+  // Brevo Integration state
+  const [brevoStatus, setBrevoStatus] = useState<BrevoStatusResponse | null>(null);
+  const [isLoadingBrevo, setIsLoadingBrevo] = useState(false);
+  const [brevoError, setBrevoError] = useState<string | null>(null);
+  const [testRecipient, setTestRecipient] = useState(user?.email || '');
+  const [isSendingTest, setIsSendingTest] = useState(false);
+  const [testSuccess, setTestSuccess] = useState<string | null>(null);
+  const [testError, setTestError] = useState<string | null>(null);
+
+  const loadBrevoStatus = async () => {
+    setIsLoadingBrevo(true);
+    setBrevoError(null);
+    try {
+      const res = await fetchBrevoStatus();
+      setBrevoStatus(res.data);
+    } catch (err: any) {
+      setBrevoError(err.message || 'Failed to check Brevo status');
+    } finally {
+      setIsLoadingBrevo(false);
+    }
+  };
+
+  // Automatically check Brevo connectivity when the Email Integration tab is opened
+  useEffect(() => {
+    if (activeTab === 'email') {
+      loadBrevoStatus();
+    }
+  }, [activeTab]);
+
+  // Keep test recipient in sync with current user email once loaded
+  useEffect(() => {
+    if (user?.email && !testRecipient) {
+      setTestRecipient(user.email);
+    }
+  }, [user?.email, testRecipient]);
+
+  const handleSendTest = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!testRecipient) return;
+    setIsSendingTest(true);
+    setTestSuccess(null);
+    setTestError(null);
+    try {
+      const res = await sendBrevoTestEmail(testRecipient);
+      setTestSuccess(res.data.message);
+    } catch (err: any) {
+      setTestError(err.message || 'Failed to send test email');
+    } finally {
+      setIsSendingTest(false);
+    }
+  };
 
   const openCreateTaxModal = () => {
     setEditingTax(null);
@@ -451,30 +503,174 @@ export const SettingsPage: React.FC = () => {
 
       {/* Tab 4: Email Integration */}
       {activeTab === 'email' && (
-        <Card
-          title="Brevo Transactional Email Service"
-          description="Delivers secure password reset links, invoice notifications, and payment receipts via Brevo REST API v3."
-        >
-          <div className="p-4 bg-slate-50 border border-slate-200 rounded-lg space-y-3 text-xs">
-            <div className="flex items-center justify-between">
-              <div>
-                <span className="font-semibold text-slate-800 block">Serverless Integration Mode</span>
-                <span className="text-slate-500">Netlify Function endpoint (`/api/auth/forgot-password`)</span>
+        <div className="space-y-4">
+          <Card
+            title="Brevo Transactional Email Service"
+            description="Delivers secure password reset links, invoice notifications, and payment receipts via Brevo REST API v3."
+            action={
+              <Button
+                variant="outline"
+                size="sm"
+                icon={<RefreshCw className={`w-3.5 h-3.5 ${isLoadingBrevo ? 'animate-spin' : ''}`} />}
+                onClick={loadBrevoStatus}
+                disabled={isLoadingBrevo}
+              >
+                Check Status
+              </Button>
+            }
+          >
+            {brevoError && <ErrorAlert message={brevoError} className="mb-4" />}
+
+            {isLoadingBrevo && !brevoStatus ? (
+              <div className="p-8 flex justify-center">
+                <LoadingSpinner size="md" label="Checking Brevo API connection..." />
               </div>
-              <Badge variant="brand" size="sm">Brevo REST v3</Badge>
-            </div>
-            <p className="text-slate-600 text-xs">
-              When a user submits a password reset request, a single-use cryptographically random token is generated. The hash is recorded in MySQL, and the recovery link is dispatched via Brevo without ever exposing API keys to the browser.
-            </p>
-            <div className="p-3 bg-white border border-slate-200 rounded-lg text-slate-500 text-[11px] space-y-1">
-              <div className="font-semibold text-slate-700">Required Environment Variables:</div>
-              <div><code>BREVO_API_KEY</code> — Your Brevo API v3 key (e.g. <code>xkeysib-...</code>)</div>
-              <div><code>BREVO_SENDER_EMAIL</code> — Your verified Brevo sender email address</div>
-              <div><code>BREVO_SENDER_NAME</code> — Sender display name (e.g. <code>"Brightloop Software"</code>)</div>
-              <div><code>APP_BASE_URL</code> — Public application URL for constructing the reset link</div>
-            </div>
-          </div>
-        </Card>
+            ) : (
+              <div className="space-y-4 text-xs">
+                {/* Live Status Banner */}
+                {brevoStatus?.connected ? (
+                  <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl space-y-3 text-emerald-950">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2 font-bold text-sm text-emerald-900">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                        Connected to Brevo REST API v3
+                      </div>
+                      <Badge variant="success" size="sm">Active & Verified</Badge>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs pt-2 border-t border-emerald-200/60">
+                      <div>
+                        <span className="text-emerald-700 block text-[11px] font-medium">Account Email</span>
+                        <span className="font-semibold text-slate-900">{brevoStatus.account?.email || 'N/A'}</span>
+                      </div>
+                      <div>
+                        <span className="text-emerald-700 block text-[11px] font-medium">Organization / Owner</span>
+                        <span className="font-semibold text-slate-900">
+                          {[brevoStatus.account?.companyName, `${brevoStatus.account?.firstName || ''} ${brevoStatus.account?.lastName || ''}`.trim()].filter(Boolean).join(' • ') || 'N/A'}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-emerald-700 block text-[11px] font-medium">Configured Sender Address</span>
+                        <span className="font-mono text-slate-900">{brevoStatus.senderEmail}</span>
+                      </div>
+                      <div>
+                        <span className="text-emerald-700 block text-[11px] font-medium">Sender Display Name</span>
+                        <span className="font-medium text-slate-900">{brevoStatus.senderName}</span>
+                      </div>
+                      {brevoStatus.account?.plan && Array.isArray(brevoStatus.account.plan) && brevoStatus.account.plan[0] && (
+                        <div className="sm:col-span-2 bg-emerald-100/70 border border-emerald-200/70 rounded-lg p-2.5 flex items-center justify-between">
+                          <span className="text-emerald-800 text-[11px] font-medium">Plan & Monthly Credits</span>
+                          <span className="font-bold text-emerald-950 text-xs">
+                            {brevoStatus.account.plan[0].type.toUpperCase()} Plan — {brevoStatus.account.plan[0].credits} credits remaining
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : brevoStatus?.configured ? (
+                  <div className="p-4 bg-rose-50 border border-rose-200 rounded-xl space-y-1.5 text-rose-950">
+                    <div className="flex items-center justify-between font-bold text-sm text-rose-900">
+                      <span>Brevo Connection Failed</span>
+                      <Badge variant="danger" size="sm">Authentication Error</Badge>
+                    </div>
+                    <p className="text-xs text-rose-800">
+                      {brevoStatus.error || 'The Brevo API rejected the configured credentials. Please check your BREVO_API_KEY in .env.'}
+                    </p>
+                  </div>
+                ) : brevoStatus ? (
+                  <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl space-y-2 text-amber-950">
+                    <div className="flex items-center justify-between font-bold text-sm text-amber-900">
+                      <span>Local Dev Simulation Mode</span>
+                      <Badge variant="warning" size="sm">Unconfigured</Badge>
+                    </div>
+                    <p className="text-xs text-amber-800">
+                      No live Brevo API key is detected in your <code>.env</code> file. Transactional emails (password reset links and invoice dispatches) are currently logged safely to your terminal output.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="p-6 flex justify-center">
+                    <LoadingSpinner size="md" label="Loading email configuration..." />
+                  </div>
+                )}
+
+                {/* Send Live Test Email Form (Admin Only) */}
+                {isAdmin && (
+                  <div className="p-4 bg-white border border-slate-200 rounded-xl space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h4 className="font-bold text-slate-900 text-xs">Dispatch Test Email</h4>
+                        <p className="text-[11px] text-slate-500">
+                          Sends a live transactional verification email through your connected Brevo account
+                        </p>
+                      </div>
+                    </div>
+
+                    {testSuccess && (
+                      <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-lg text-emerald-800 text-xs flex items-center gap-2">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                        <span>{testSuccess}</span>
+                      </div>
+                    )}
+
+                    {testError && <ErrorAlert message={testError} onDismiss={() => setTestError(null)} />}
+
+                    <form onSubmit={handleSendTest} className="flex flex-col sm:flex-row items-center gap-2">
+                      <input
+                        type="email"
+                        required
+                        placeholder="recipient@example.com"
+                        value={testRecipient}
+                        onChange={(e) => setTestRecipient(e.target.value)}
+                        className="w-full sm:flex-1 px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-900 focus:bg-white"
+                      />
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        type="submit"
+                        isLoading={isSendingTest}
+                        icon={<Send className="w-3.5 h-3.5" />}
+                      >
+                        Send Test Email
+                      </Button>
+                    </form>
+                  </div>
+                )}
+
+                {/* How to Connect Brevo Instructions */}
+                <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-2.5 text-slate-600 text-xs">
+                  <h4 className="font-bold text-slate-900">How to Connect Brevo to Your Website</h4>
+                  <ol className="list-decimal list-inside space-y-1.5 text-slate-600">
+                    <li>
+                      Create a free account at{' '}
+                      <a href="https://app.brevo.com" target="_blank" rel="noreferrer" className="text-indigo-600 underline font-medium">
+                        app.brevo.com
+                      </a>.
+                    </li>
+                    <li>
+                      In Brevo, go to <strong>Senders &amp; Domains</strong> and add your sender email address (e.g. <code>billing@yourcompany.com</code>).
+                    </li>
+                    <li>
+                      In Brevo, go to <strong>Settings &rarr; API Keys</strong> and generate a new REST API v3 key (starts with <code>xkeysib-</code>).
+                    </li>
+                    <li>
+                      Add the keys to your local <code>.env</code> file (or Netlify Environment Variables in production):
+                      <div className="mt-1 p-2 bg-slate-900 text-emerald-400 font-mono text-[11px] rounded-lg space-y-0.5">
+                        <div>BREVO_API_KEY=xkeysib-your-real-key-here</div>
+                        <div>BREVO_SENDER_EMAIL=your-verified-email@domain.com</div>
+                        <div>BREVO_SENDER_NAME="Brightloop Software"</div>
+                      </div>
+                    </li>
+                    <li>
+                      Verify the connection anytime in your terminal by running:
+                      <div className="mt-1 p-2 bg-slate-900 text-slate-100 font-mono text-[11px] rounded-lg">
+                        npm run brevo:test
+                      </div>
+                    </li>
+                  </ol>
+                </div>
+              </div>
+            )}
+          </Card>
+        </div>
       )}
 
       {/* Tax Rule Create / Edit Modal (Admin Only) */}

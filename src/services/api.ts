@@ -895,3 +895,40 @@ export function useDashboardMetrics() {
   return { data, isLoading, error, refetch: fetchMetrics };
 }
 
+export interface BrevoStatusResponse {
+  configured: boolean;
+  connected: boolean;
+  senderEmail: string;
+  senderName: string;
+  account?: {
+    email: string;
+    companyName?: string;
+    firstName?: string;
+    lastName?: string;
+    plan?: any[];
+  } | null;
+  error?: string;
+}
+
+/**
+ * Query: Check Brevo live connection status & account details
+ */
+export async function fetchBrevoStatus() {
+  return fetchApi<BrevoStatusResponse>('email/status');
+}
+
+/**
+ * Mutation: Send live test email via Brevo REST API v3
+ */
+export async function sendBrevoTestEmail(recipientEmail: string) {
+  return fetchApi<{
+    message: string;
+    messageId?: string;
+    devMode?: boolean;
+  }>('email/test', {
+    method: 'POST',
+    body: JSON.stringify({ recipientEmail }),
+  });
+}
+
+

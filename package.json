@@ -9,7 +9,9 @@
     "preview": "vite preview",
     "db:migrate": "node scripts/migrate.js",
     "db:seed": "node scripts/migrate.js --seed",
-    "admin:bootstrap": "node scripts/bootstrap-admin.js"
+    "admin:bootstrap": "node scripts/bootstrap-admin.js",
+    "brevo:test": "node scripts/test-brevo.js",
+    "server": "node scripts/dev-server.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

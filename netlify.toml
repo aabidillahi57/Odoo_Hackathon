@@ -48,6 +48,24 @@
   status = 200
 
 # =============================================================================
+# Email Integration (Brevo) API Routes
+# =============================================================================
+[[redirects]]
+  from = "/api/email/status"
+  to = "/.netlify/functions/email-settings"
+  status = 200
+
+[[redirects]]
+  from = "/api/email/test"
+  to = "/.netlify/functions/email-settings"
+  status = 200
+
+[[redirects]]
+  from = "/api/email/*"
+  to = "/.netlify/functions/email-settings"
+  status = 200
+
+# =============================================================================
 # Subscription, Invoice, Discount, Payment & Billing API Routes
 # =============================================================================
 [[redirects]]
