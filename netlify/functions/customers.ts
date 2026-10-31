@@ -1,24 +1,34 @@
 import { isDbConfigured, executeQuery } from './_shared/db';
 import { jsonSuccess, jsonError, handleOptions } from './_shared/response';
+import { getAuthenticatedUser } from './_shared/auth';
 
 export async function handler(event: any) {
+  const origin = event.headers.origin || event.headers.Origin;
+
   if (event.httpMethod === 'OPTIONS') {
-    return handleOptions();
+    return handleOptions(origin);
   }
 
   if (event.httpMethod !== 'GET') {
-    return jsonError('Method Not Allowed', 405);
+    return jsonError('Method Not Allowed', 405, undefined, {}, origin);
   }
 
   if (!isDbConfigured()) {
     return jsonError(
       'Database not configured. Please configure local MySQL in .env and run migrations.',
       503,
-      'DB_NOT_CONFIGURED'
+      'DB_NOT_CONFIGURED',
+      {},
+      origin
     );
   }
 
   try {
+    const currentUser = await getAuthenticatedUser(event);
+
+    // If customer role, strictly isolate to their own record
+    const isCustomerPortal = currentUser && currentUser.role === 'customer';
+
     const params = event.queryStringParameters || {};
 
     // Validate and clamp pagination inputs
@@ -35,7 +45,11 @@ export async function handler(event: any) {
     let whereClause = '';
     const queryParams: any[] = [];
 
-    if (search) {
+    if (isCustomerPortal) {
+      // Customer isolation: can only access own customer record
+      whereClause = 'WHERE c.user_id = ?';
+      queryParams.push(currentUser.id);
+    } else if (search) {
       whereClause = 'WHERE (c.name LIKE ? OR c.company_name LIKE ? OR c.email LIKE ?)';
       const searchPattern = `%${search}%`;
       queryParams.push(searchPattern, searchPattern, searchPattern);
@@ -77,16 +91,22 @@ export async function handler(event: any) {
       createdAt: c.created_at ? new Date(c.created_at).toISOString().split('T')[0] : '',
     }));
 
-    return jsonSuccess(customers, {
-      page,
-      limit,
-      total,
-      totalPages,
-    });
+    return jsonSuccess(
+      customers,
+      {
+        page,
+        limit,
+        total,
+        totalPages,
+      },
+      200,
+      {},
+      origin
+    );
   } catch (error: any) {
     if (error.code === 'ECONNREFUSED' || error.code === 'ER_ACCESS_DENIED_ERROR') {
-      return jsonError('Database connection error. Please verify local MySQL is running.', 503, 'DB_UNAVAILABLE');
+      return jsonError('Database connection error. Please verify local MySQL is running.', 503, 'DB_UNAVAILABLE', {}, origin);
     }
-    return jsonError('Failed to fetch customers from database', 500);
+    return jsonError('Failed to fetch customers from database', 500, undefined, {}, origin);
   }
 }

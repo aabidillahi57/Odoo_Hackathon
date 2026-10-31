@@ -76,15 +76,47 @@ This checklist tracks the implementation progress for the Brightloop Subscriptio
 
 ---
 
-### Phase 4: Authentication, Security & Role-Based Access Control (RBAC)
-- [ ] Backend CRUD for Tax Rules (Admin only)
-- [ ] Backend CRUD for Products (software, services, add-ons) and Product Variants (e.g., brand/tier price adjustments)
-- [ ] Backend CRUD for Billing Plans (daily, weekly, monthly, yearly cycles, min quantity, auto-close, pause rules)
-- [ ] Admin UI screens:
-  - [ ] Product & Variant catalog manager
-  - [ ] Plans management screen
-  - [ ] Taxes configuration table
-- [ ] Robust client and server-side validation for currency amounts and percentage rates
+### Phase 4: Authentication, Security & Role-Based Access Control (RBAC) — **Completed**
+- [x] **Database schema** extended with `user_sessions`, `password_reset_tokens`, and `auth_rate_limits` tables (already included in `schema.sql` and `database/migrations/002_auth_sessions.sql`)
+- [x] **Shared auth helpers** (`netlify/functions/_shared/auth.ts`):
+  - [x] Email normalization and validation
+  - [x] Password complexity validation (>8 chars, uppercase, lowercase, special character)
+  - [x] bcrypt (salt factor 12) password hashing and verification
+  - [x] SHA-256 token hashing for sessions and reset tokens
+  - [x] Cryptographically random token generation
+  - [x] Server-managed opaque session creation and revocation (HttpOnly cookie)
+  - [x] `getAuthenticatedUser()` — validates session against DB for every protected request
+  - [x] `revokeSession()` and `revokeAllUserSessions()` — logout and post-reset revocation
+  - [x] `checkRateLimit()` and `clearRateLimit()` — DB-backed brute-force protection
+- [x] **Brevo email service** (`netlify/functions/_shared/brevo.ts`):
+  - [x] `sendPasswordResetEmail()` via Brevo REST API v3 (HTTPS, server-side only)
+  - [x] Dev-mode fallback when `BREVO_API_KEY` is unconfigured (logs simulated URL, returns `devMode: true`)
+  - [x] `isBrevoConfigured()` — rejects placeholder/stub keys
+- [x] **Netlify Function endpoints** (all using DB-backed opaque sessions, no JWTs):
+  - [x] `POST /api/auth/register` — Customer self-signup with email uniqueness check, bcrypt hash, customer record linkage, session cookie
+  - [x] `POST /api/auth/login` — Credential verification, rate limiting, session cookie
+  - [x] `POST /api/auth/logout` — Session revocation and cookie clearance
+  - [x] `GET /api/auth/me` — Returns authenticated user profile from session cookie
+  - [x] `POST /api/auth/forgot-password` — Generic response, rate-limited, single-use reset token stored hashed, Brevo email dispatch
+  - [x] `POST /api/auth/reset-password` — Token validation, password policy, bcrypt update, all sessions revoked
+  - [x] `POST /api/auth/create-staff` — Admin-only staff account creation with role enforcement
+- [x] **Route routing fixes**:
+  - [x] `netlify.toml` — explicit redirect rules for `/api/auth/*` → `auth-*` function names (before generic rule)
+  - [x] `vite.config.ts` — matching dev proxy rules for all auth routes
+- [x] **Frontend auth screens** (all connected to real API, no demo data):
+  - [x] `LoginPage` — redirects by role (admin/staff → `/`, customer → `/portal`)
+  - [x] `SignupPage` — with interactive password policy feedback, confirms password
+  - [x] `ForgotPasswordPage` — generic success message, dev-mode reset URL display
+  - [x] `ResetPasswordPage` — token from URL params, policy feedback, revokes all sessions on success
+- [x] **AuthContext** — `login`, `register`, `logout`, `refreshUser`, `clearError`; session probed via `GET /api/auth/me` on mount; credentials: include on all requests
+- [x] **ProtectedRoute** — blocks unauthenticated access, role check with customer redirect
+- [x] **Role-aware Sidebar** — Discounts item hidden from Staff role (Admin-only); role label in footer
+- [x] **CustomerPortalPage** — connected to live auth; shows authenticated view with profile banner
+- [x] **SettingsPage** — Staff Accounts tab with Admin-only Create Staff form (client role check for UX; server enforces)
+- [x] **Header** — shows role badge, user name/email, logout button when authenticated
+- [x] **Password policy utility** (`src/utils/passwordPolicy.ts`) — shared frontend rule evaluation
+- [x] **Admin bootstrap script** (`scripts/bootstrap-admin.js` / `npm run admin:bootstrap`) — interactive secure prompt, no hard-coded credentials, supports `--email` and `--password` args
+- [x] **TypeScript build** — zero errors (`npm run build`)
 
 ---
 

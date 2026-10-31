@@ -6,41 +6,74 @@ export interface ApiResponse<T = any> {
   code?: string;
 }
 
-const CORS_HEADERS = {
-  'Content-Type': 'application/json',
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-};
+export function getCorsHeaders(origin?: string): Record<string, string> {
+  return {
+    'Content-Type': 'application/json',
+    'Access-Control-Allow-Origin': origin || '*',
+    'Access-Control-Allow-Credentials': 'true',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, Cookie',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+  };
+}
 
-export function jsonResponse(statusCode: number, payload: ApiResponse) {
+export function jsonResponse(
+  statusCode: number,
+  payload: ApiResponse,
+  extraHeaders: Record<string, string> = {},
+  origin?: string
+) {
   return {
     statusCode,
-    headers: CORS_HEADERS,
+    headers: {
+      ...getCorsHeaders(origin),
+      ...extraHeaders,
+    },
     body: JSON.stringify(payload),
   };
 }
 
-export function jsonSuccess<T>(data: T, meta?: Record<string, any>, statusCode = 200) {
-  return jsonResponse(statusCode, {
-    success: true,
-    data,
-    meta,
-  });
+export function jsonSuccess<T>(
+  data: T,
+  meta?: Record<string, any>,
+  statusCode = 200,
+  extraHeaders: Record<string, string> = {},
+  origin?: string
+) {
+  return jsonResponse(
+    statusCode,
+    {
+      success: true,
+      data,
+      meta,
+    },
+    extraHeaders,
+    origin
+  );
 }
 
-export function jsonError(message: string, statusCode = 500, code?: string) {
-  return jsonResponse(statusCode, {
-    success: false,
-    error: message,
-    code,
-  });
+export function jsonError(
+  message: string,
+  statusCode = 500,
+  code?: string,
+  extraHeaders: Record<string, string> = {},
+  origin?: string
+) {
+  return jsonResponse(
+    statusCode,
+    {
+      success: false,
+      error: message,
+      code,
+    },
+    extraHeaders,
+    origin
+  );
 }
 
-export function handleOptions() {
+export function handleOptions(origin?: string) {
   return {
     statusCode: 204,
-    headers: CORS_HEADERS,
+    headers: getCorsHeaders(origin),
     body: '',
   };
 }

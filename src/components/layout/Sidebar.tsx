@@ -1,5 +1,6 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
+import { useAuth } from '../../context/AuthContext';
 import {
   LayoutDashboard,
   Users,
@@ -26,6 +27,8 @@ interface NavItem {
   path: string;
   icon: React.ComponentType<{ className?: string }>;
   badge?: string;
+  /** Roles that can see this item. Omit to show to all internal roles. */
+  roles?: ('admin' | 'staff')[];
 }
 
 const navItems: NavItem[] = [
@@ -37,12 +40,22 @@ const navItems: NavItem[] = [
   { name: 'Subscriptions', path: '/subscriptions', icon: Repeat },
   { name: 'Invoices', path: '/invoices', icon: Receipt },
   { name: 'Payments', path: '/payments', icon: CreditCard },
-  { name: 'Discounts', path: '/discounts', icon: Tag },
+  // Discounts are Admin-only per RBAC policy (Staff cannot create discount rules)
+  { name: 'Discounts', path: '/discounts', icon: Tag, roles: ['admin'] },
   { name: 'Reports', path: '/reports', icon: BarChart3 },
   { name: 'Settings', path: '/settings', icon: Settings },
 ];
 
 export const Sidebar: React.FC<SidebarProps> = ({ onCloseMobile }) => {
+  const { user } = useAuth();
+  const role = user?.role as 'admin' | 'staff' | 'customer' | undefined;
+
+  // Filter nav items by role — server enforces the same rules; this is UX only
+  const visibleItems = navItems.filter((item) => {
+    if (!item.roles) return true;
+    return role && item.roles.includes(role as 'admin' | 'staff');
+  });
+
   return (
     <aside className="w-64 bg-slate-900 text-slate-300 flex flex-col h-full border-r border-slate-800 shrink-0 select-none">
       {/* Brand Header */}
@@ -67,7 +80,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ onCloseMobile }) => {
           Internal Operations
         </div>
 
-        {navItems.map((item) => {
+        {visibleItems.map((item) => {
           const Icon = item.icon;
           return (
             <NavLink
@@ -96,6 +109,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ onCloseMobile }) => {
                   {item.badge && (
                     <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
                       {item.badge}
+                    </span>
+                  )}
+                  {item.roles?.includes('admin') && !item.roles?.includes('staff') && (
+                    <span className="text-[10px] px-1 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/20 ml-auto">
+                      Admin
                     </span>
                   )}
                 </>
@@ -129,9 +147,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ onCloseMobile }) => {
         <div className="px-2 py-1.5 flex items-center justify-between text-[11px] text-slate-400">
           <div className="flex items-center gap-1.5">
             <ShieldCheck className="w-3.5 h-3.5 text-indigo-400" />
-            <span>Role: Admin / Staff</span>
+            <span className="capitalize">Role: {user?.role || 'Admin'}</span>
           </div>
-          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" title="System Online (Demo Mode)" />
+          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" title="Security Session Active" />
         </div>
       </div>
     </aside>

@@ -1,15 +1,11 @@
 -- =============================================================================
 -- Brightloop Software - Subscription Management System
 -- Initial Seed Data for Local Development
+-- (Notice: Admin accounts are bootstrapped securely via `npm run admin:bootstrap`,
+--  preventing hard-coded credentials in the repository)
 -- =============================================================================
 
--- 1. Initial Admin User
--- Password placeholder for local dev: 'AdminPass123!' (bcrypt hash placeholder)
-INSERT INTO users (id, email, password_hash, role, first_name, last_name, is_active)
-VALUES (1, 'admin@brightloop.local', '$2b$10$wE9K2s.V0K8YdJ9yvL5lU.qA91q4pC3tX7z6M3iQ8uG5hJ4kL9wO6', 'admin', 'System', 'Administrator', TRUE)
-ON DUPLICATE KEY UPDATE email=VALUES(email);
-
--- 2. Tax Rates
+-- 1. Tax Rates
 INSERT INTO taxes (id, name, rate_percentage, is_active)
 VALUES 
     (1, 'GST Standard', 18.00, TRUE),

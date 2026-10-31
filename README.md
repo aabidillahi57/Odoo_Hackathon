@@ -13,9 +13,13 @@ A unified, modern web platform designed for **Brightloop Software** to manage re
 3. [User Roles & Access Control](#user-roles--access-control)
 4. [Database & Entity Relationships](#database--entity-relationships)
 5. [Local Development Setup](#local-development-setup)
-6. [Environment Variables](#environment-variables)
-7. [Production Deployment (Netlify & Remote MySQL)](#production-deployment-netlify--remote-mysql)
-8. [Project Roadmap & Next Steps](#project-roadmap--next-steps)
+6. [Serverless API Layer](#serverless-api-layer-netlify-functions)
+7. [Authentication & Security](#authentication--security)
+8. [First Admin Account Bootstrap](#first-admin-account-bootstrap)
+9. [Brevo Email Service Setup](#brevo-email-service-setup)
+10. [Environment Variables](#environment-variables)
+11. [Production Deployment (Netlify & Remote MySQL)](#production-deployment-netlify--remote-mysql)
+12. [Project Roadmap & Next Steps](#project-roadmap--next-steps)
 
 ---
 
@@ -183,12 +187,29 @@ The relational model is declared in [`database/schema.sql`](file:///Users/harsht
 
 All database operations execute server-side in `netlify/functions/`:
 
+### Authentication Endpoints
+
+| Endpoint | Method | Description |
+| :--- | :---: | :--- |
+| `/api/auth/register` | `POST` | Customer self-registration. Creates user + linked customer record, returns session cookie. |
+| `/api/auth/login` | `POST` | Credential verification with rate limiting. Returns HttpOnly session cookie on success. |
+| `/api/auth/logout` | `POST` | Revokes server-side session. Clears browser cookie. |
+| `/api/auth/me` | `GET` | Returns authenticated user profile from current session cookie. |
+| `/api/auth/forgot-password` | `POST` | Creates single-use hashed reset token, sends Brevo email (generic response whether email exists or not). |
+| `/api/auth/reset-password` | `POST` | Validates reset token, updates bcrypt password hash, revokes all active sessions. |
+| `/api/auth/create-staff` | `POST` | **Admin only.** Creates an internal staff account. |
+
+### Core Data Endpoints
+
 | Endpoint | Method | Description |
 | :--- | :---: | :--- |
 | `/api/health` | `GET` | Reports API service health and performs a live database ping test without exposing credentials. |
 | `/api/products` | `GET` | Fetches active catalog products with nested variants and price adjustments. |
 | `/api/plans` | `GET` | Returns active billing plans (daily, weekly, monthly, yearly) and lifecycle policies. |
 | `/api/customers` | `GET` | Returns paginated customer records (`?page=1&limit=10&search=...`) with safe bounds. |
+
+> [!NOTE]
+> Routes needing protection in later stages (subscriptions, invoices, payments) should use `getAuthenticatedUser(event)` from `netlify/functions/_shared/auth.ts` and check the returned user's role before serving data.
 
 ---
 
@@ -199,6 +220,7 @@ Copy `.env.example` to `.env`. The system expects the following variables:
 | Variable | Description | Local Dev Example | Production Target |
 | :--- | :--- | :--- | :--- |
 | `NODE_ENV` | Environment mode | `development` | `production` |
+| `APP_BASE_URL` | Public app URL — used in reset link emails | `http://localhost:8888` | `https://your-app.netlify.app` |
 | `APP_URL` | Public application URL | `http://localhost:8888` | `https://your-app.netlify.app` |
 | `DB_HOST` | MySQL hostname | `127.0.0.1` | Remote cloud DB host |
 | `DB_PORT` | MySQL port | `3306` | `3306` |
@@ -207,11 +229,139 @@ Copy `.env.example` to `.env`. The system expects the following variables:
 | `DB_NAME` | Database schema name | `brightloop_subscriptions` | `brightloop_subscriptions` |
 | `DB_SSL` | Enable SSL for DB connection | `false` | `true` |
 | `DATABASE_URL` | Optional URI connection string | *optional* | `mysql://user:pass@host:3306/db?ssl=true` |
-| `JWT_SECRET` | Secret key for JWT signing | *32+ char random string* | Secure production secret |
-| `JWT_EXPIRES_IN` | Token expiration | `7d` | `7d` |
 | `BREVO_API_KEY` | Brevo API key for transactional email | *placeholder* | `xkeysib-...` |
-| `BREVO_SENDER_EMAIL` | Sender email address | `noreply@brightloop.com` | Verified domain email |
+| `BREVO_SENDER_EMAIL` | Sender email address (must be verified in Brevo) | `noreply@brightloop.com` | Verified domain email |
 | `BREVO_SENDER_NAME` | Sender display name | `Brightloop Software` | `Brightloop Software` |
+
+> [!CAUTION]
+> Never paste real API keys, passwords, or session tokens in chat, source code, or Git commits. Use `.env` locally and Netlify environment variables in production.
+
+---
+
+## Authentication & Security
+
+### Session Design
+
+- Sessions use **opaque, randomly generated 64-byte tokens** (not JWTs).
+- The raw token is sent to the browser in an **HttpOnly, SameSite=Lax, Secure (production)** cookie named `session_token`.
+- Only the **SHA-256 hash** of the token is stored in the `user_sessions` table — the raw token is never persisted.
+- Logout revokes the session row in the database.
+- All sessions for a user are revoked after a successful password reset.
+- Expired or revoked sessions are rejected at the `getAuthenticatedUser()` helper level on every request.
+
+### Password Policy
+
+All passwords must:
+- Be **longer than 8 characters** (minimum 9)
+- Contain at least **one uppercase letter** (A-Z)
+- Contain at least **one lowercase letter** (a-z)
+- Contain at least **one special character** (`!@#$%^&*` etc.)
+
+Validated client-side (UX feedback) **and** server-side (security). Passwords are stored only as bcrypt hashes (salt factor 12).
+
+### Rate Limiting
+
+Login and password-reset endpoints are protected by a database-backed rate limiter (`auth_rate_limits` table):
+- **Login:** 5 attempts per 15-minute window per (IP + email); 15-minute lockout on breach.
+- **Password Reset:** 4 attempts per 15-minute window per IP; 15-minute lockout on breach.
+
+### Roles & Permissions
+
+| Action | Admin | Staff | Customer |
+| :--- | :---: | :---: | :---: |
+| Sign up (public customer registration) | ✅ | — | ✅ |
+| Login / logout | ✅ | ✅ | ✅ |
+| View customer portal (own records only) | ✅ | ✅ | ✅ |
+| Manage customers, subscriptions, invoices, payments | ✅ | ✅ | ❌ |
+| View finance reports | ✅ | ✅ | ❌ |
+| Create & configure products, plans, taxes | ✅ | ❌ | ❌ |
+| Create discount rules | ✅ | ❌ | ❌ |
+| Create staff accounts | ✅ | ❌ | ❌ |
+| Bootstrap first Admin account | CLI only | — | — |
+
+> [!IMPORTANT]
+> Role checks in the frontend are **UX-only**. Every protected API endpoint verifies the session and role server-side via `getAuthenticatedUser(event)` in `netlify/functions/_shared/auth.ts`. Hiding a navigation link is not sufficient authorization.
+
+### Protecting Future API Routes
+
+For any new Netlify Function that requires authentication, add this pattern at the top of the handler:
+
+```typescript
+import { getAuthenticatedUser } from './_shared/auth';
+
+const user = await getAuthenticatedUser(event);
+if (!user) return jsonError('Unauthenticated.', 401, 'UNAUTHENTICATED', {}, origin);
+if (user.role !== 'admin') return jsonError('Forbidden.', 403, 'FORBIDDEN', {}, origin);
+// For customer-scoped data: always filter by user.customerId, never trust client-supplied IDs.
+```
+
+---
+
+## First Admin Account Bootstrap
+
+There is **no public Admin registration form**. The first Admin account is created via a secure local CLI script:
+
+```bash
+# Ensure your .env is configured with local MySQL credentials, then:
+npm run admin:bootstrap
+```
+
+The script will interactively prompt for an email and password, validate the password policy, hash using bcrypt, and insert (or update) the Admin record. It never logs or stores the plain-text password.
+
+You can also provide credentials non-interactively (useful for CI setup only — avoid passing passwords in shell history):
+
+```bash
+node scripts/bootstrap-admin.js --email=admin@yourcompany.com --first-name=System --last-name=Admin
+# The script will prompt for the password interactively even with --email set.
+```
+
+> [!WARNING]
+> This script requires a **running local MySQL** instance with the schema already applied. Run `npm run db:migrate` first.
+
+---
+
+## Brevo Email Service Setup
+
+Brevo handles transactional password-reset emails. The browser **never** calls Brevo directly.
+
+### 1. Create a Brevo Account
+
+- Sign up at [https://app.brevo.com](https://app.brevo.com) (free tier available).
+
+### 2. Verify Your Sender Email or Domain
+
+- Go to **Senders & Domains** in Brevo.
+- Add and verify the email address you'll use as `BREVO_SENDER_EMAIL`.
+
+### 3. Generate an API Key
+
+- Go to **Settings → API Keys** in Brevo.
+- Create a new key with SMTP/Email permissions.
+- Copy the key (starts with `xkeysib-`). **This is shown once — store it securely.**
+
+### 4. Configure Environment Variables
+
+**Local development — in your `.env` file (not committed to Git):**
+
+```bash
+BREVO_API_KEY=xkeysib-your-real-key-here
+BREVO_SENDER_EMAIL=noreply@yourdomain.com
+BREVO_SENDER_NAME=Brightloop Software
+APP_BASE_URL=http://localhost:8888
+```
+
+**Netlify production — via Netlify dashboard:**
+- Go to **Site configuration → Environment variables**.
+- Add `BREVO_API_KEY`, `BREVO_SENDER_EMAIL`, `BREVO_SENDER_NAME`, `APP_BASE_URL` (your production URL).
+- After adding variables, **trigger a new deploy** (environment changes do not apply automatically).
+
+### 5. Local Dev Without Brevo
+
+If `BREVO_API_KEY` is unset or is a placeholder:
+- The server logs a safe notice with a simulated reset URL.
+- The API returns `devMode: true` and `devResetUrl` in the response body.
+- The Forgot Password page displays a clickable dev link so you can test the full reset flow locally.
+- The app continues to start normally — no crash or fake success.
 
 ---
 
@@ -239,8 +389,13 @@ Copy `.env.example` to `.env`. The system expects the following variables:
 
 See [`TASKS.md`](file:///Users/harshthakur/Odoo_Hackathon/TASKS.md) for the detailed step-by-step implementation checklist.
 
-**Upcoming Step (Phase 4):**
-- Authentication & RBAC: User login, registration, JWT session issuance, password strength enforcement, and route protection.
-- Initialize React + TypeScript + Vite frontend scaffolding with Tailwind CSS.
-- Configure Netlify Functions structure (`netlify/functions/`) and MySQL connection pool.
-- Implement base API router and database health-check endpoint.
+**Completed Phases:**
+- Phase 1: Foundation, Architecture & Data Modeling
+- Phase 2: Frontend Foundation & Navigation Shell
+- Phase 3: MySQL Database Foundation & Server-Side API Layer
+- Phase 4: Authentication, Security & Role-Based Access Control (RBAC)
+
+**Next Step (Phase 5): Customers & Quotation Templates**
+- Backend CRUD for Customers (searchable, filterable, linked to user accounts)
+- Quotation Templates backend (presets with default plans, line items, validity duration)
+- Internal Staff UI: Customer directory, detail view, quotation template manager

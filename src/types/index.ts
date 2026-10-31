@@ -4,9 +4,32 @@ export interface User {
   id: number;
   email: string;
   role: UserRole;
+  firstName?: string | null;
+  lastName?: string | null;
+  isActive: boolean;
+  customerId?: number | null;
+}
+
+export interface AuthenticatedUser extends User {}
+
+export interface LoginCredentials {
+  email: string;
+  password: string;
+}
+
+export interface RegisterData {
+  email: string;
+  password: string;
   firstName?: string;
   lastName?: string;
-  isActive: boolean;
+  companyName?: string;
+}
+
+export interface CreateStaffData {
+  email: string;
+  password: string;
+  firstName?: string;
+  lastName?: string;
 }
 
 export interface Customer {

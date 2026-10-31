@@ -1,15 +1,22 @@
 import React from 'react';
-import { Menu, Search, Bell, User, Database } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Menu, Search, Bell, User, Database, LogOut } from 'lucide-react';
 import { Badge } from '../common/Badge';
 import { useApiHealth } from '../../services/api';
+import { useAuth } from '../../context/AuthContext';
 
 interface HeaderProps {
   onOpenMobileNav: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({ onOpenMobileNav }) => {
-  const { health, isLoading } = useApiHealth();
+  const { health, isLoading: isHealthLoading } = useApiHealth();
+  const { user, logout, isAuthenticated } = useAuth();
   const isDbConnected = health?.database?.connected;
+
+  const displayName = user
+    ? [user.firstName, user.lastName].filter(Boolean).join(' ') || user.email.split('@')[0]
+    : 'Guest Session';
 
   return (
     <header className="h-16 bg-white border-b border-slate-200/80 px-4 sm:px-6 flex items-center justify-between gap-4 sticky top-0 z-20">
@@ -38,7 +45,7 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileNav }) => {
       {/* Right section: System state indicator, notifications, and user avatar */}
       <div className="flex items-center gap-2 sm:gap-3 shrink-0">
         <div className="hidden sm:flex items-center gap-2">
-          {isLoading ? (
+          {isHealthLoading ? (
             <Badge variant="neutral" size="sm">Checking DB...</Badge>
           ) : isDbConnected ? (
             <Badge variant="success" size="sm" className="hidden md:inline-flex gap-1 items-center">
@@ -52,9 +59,14 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileNav }) => {
             </Badge>
           )}
 
-          <Badge variant="neutral" size="sm">
-            Admin View
-          </Badge>
+          {user && (
+            <Badge
+              variant={user.role === 'admin' ? 'brand' : user.role === 'staff' ? 'info' : 'success'}
+              size="sm"
+            >
+              {user.role}
+            </Badge>
+          )}
         </div>
 
         <button
@@ -68,16 +80,34 @@ export const Header: React.FC<HeaderProps> = ({ onOpenMobileNav }) => {
 
         {/* User profile dropdown trigger */}
         <div className="flex items-center gap-2 pl-2 border-l border-slate-200">
-          <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-500 to-indigo-700 text-white flex items-center justify-center font-semibold text-xs shadow-xs">
-            <User className="w-4 h-4" />
-          </div>
-          <div className="hidden xl:block text-left">
-            <p className="text-xs font-semibold text-slate-800 leading-tight">Brightloop Staff</p>
-            <p className="text-[11px] text-slate-400 leading-none">admin@brightloop.local</p>
-          </div>
+          {isAuthenticated && user ? (
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-500 to-indigo-700 text-white flex items-center justify-center font-semibold text-xs shadow-xs">
+                {user.firstName ? user.firstName[0].toUpperCase() : <User className="w-4 h-4" />}
+              </div>
+              <div className="hidden xl:block text-left">
+                <p className="text-xs font-semibold text-slate-800 leading-tight">{displayName}</p>
+                <p className="text-[11px] text-slate-400 leading-none">{user.email}</p>
+              </div>
+              <button
+                onClick={() => logout()}
+                title="Sign out of your session"
+                className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors ml-1"
+                aria-label="Sign out"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            </div>
+          ) : (
+            <Link
+              to="/login"
+              className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 px-3 py-1.5 rounded-lg bg-indigo-50"
+            >
+              Sign In
+            </Link>
+          )}
         </div>
       </div>
     </header>
   );
 };
-

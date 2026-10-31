@@ -8,13 +8,55 @@
   targetPort = 5173
   port = 8888
 
-# Rewrites /api/* to /.netlify/functions/*
+# =============================================================================
+# Auth API Routes — map /api/auth/* to hyphenated function names
+# These must appear BEFORE the generic /api/* rule.
+# =============================================================================
+[[redirects]]
+  from = "/api/auth/login"
+  to = "/.netlify/functions/auth-login"
+  status = 200
+
+[[redirects]]
+  from = "/api/auth/register"
+  to = "/.netlify/functions/auth-register"
+  status = 200
+
+[[redirects]]
+  from = "/api/auth/logout"
+  to = "/.netlify/functions/auth-logout"
+  status = 200
+
+[[redirects]]
+  from = "/api/auth/me"
+  to = "/.netlify/functions/auth-me"
+  status = 200
+
+[[redirects]]
+  from = "/api/auth/forgot-password"
+  to = "/.netlify/functions/auth-forgot-password"
+  status = 200
+
+[[redirects]]
+  from = "/api/auth/reset-password"
+  to = "/.netlify/functions/auth-reset-password"
+  status = 200
+
+[[redirects]]
+  from = "/api/auth/create-staff"
+  to = "/.netlify/functions/auth-create-staff"
+  status = 200
+
+# =============================================================================
+# Generic API route — Rewrites /api/* to /.netlify/functions/:splat
+# Handles all non-auth endpoints (health, products, plans, customers, etc.)
+# =============================================================================
 [[redirects]]
   from = "/api/*"
   to = "/.netlify/functions/:splat"
   status = 200
 
-# Client-side SPA routing fallback
+# Client-side SPA routing fallback — MUST be last
 [[redirects]]
   from = "/*"
   to = "/index.html"
