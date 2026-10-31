@@ -48,8 +48,33 @@
   status = 200
 
 # =============================================================================
-# Subscription & Quotation API Routes
+# Subscription, Invoice & Billing API Routes
 # =============================================================================
+[[redirects]]
+  from = "/api/billing/run"
+  to = "/.netlify/functions/billing-run"
+  status = 200
+
+[[redirects]]
+  from = "/api/invoices"
+  to = "/.netlify/functions/invoices"
+  status = 200
+
+[[redirects]]
+  from = "/api/invoices/*"
+  to = "/.netlify/functions/invoices"
+  status = 200
+
+[[redirects]]
+  from = "/api/taxes"
+  to = "/.netlify/functions/taxes"
+  status = 200
+
+[[redirects]]
+  from = "/api/taxes/*"
+  to = "/.netlify/functions/taxes"
+  status = 200
+
 [[redirects]]
   from = "/api/subscriptions"
   to = "/.netlify/functions/subscriptions"

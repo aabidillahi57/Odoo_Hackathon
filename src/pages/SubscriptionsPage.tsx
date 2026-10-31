@@ -19,6 +19,7 @@ import {
   Building,
   User,
   Trash2,
+  Edit2,
 } from 'lucide-react';
 import { PageHeader } from '../components/common/PageHeader';
 import { Button, ButtonVariant } from '../components/common/Button';
@@ -35,6 +36,7 @@ import {
   useCustomers,
   useQuotationTemplates,
   createSubscription,
+  updateSubscription,
   transitionSubscription,
   renewSubscription,
   issueSubscriptionFromTemplate,
@@ -552,6 +554,7 @@ export const SubscriptionsPage: React.FC = () => {
         <SubscriptionDetailModal
           subId={selectedSubId}
           subscription={selectedSubscription}
+          products={products || []}
           isLoading={isLoadingDetail}
           error={detailError}
           isStaffOrAdmin={isStaffOrAdmin}
@@ -660,6 +663,7 @@ export const SubscriptionsPage: React.FC = () => {
 interface DetailModalProps {
   subId: number;
   subscription: Subscription | null;
+  products: Product[];
   isLoading: boolean;
   error: string | null;
   isStaffOrAdmin: boolean;
@@ -678,13 +682,17 @@ interface DetailModalProps {
 const SubscriptionDetailModal: React.FC<DetailModalProps> = ({
   subId,
   subscription,
+  products,
   isLoading,
   error,
   isStaffOrAdmin,
   onClose,
   onTransition,
   onRenew,
+  onUpdated,
 }) => {
+  const [isEditing, setIsEditing] = useState(false);
+
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6 overflow-y-auto">
       <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[92vh] flex flex-col border border-slate-200 animate-in fade-in zoom-in-95 my-auto">
@@ -737,6 +745,16 @@ const SubscriptionDetailModal: React.FC<DetailModalProps> = ({
             </div>
           ) : error || !subscription ? (
             <ErrorAlert message={error || 'Subscription could not be loaded.'} />
+          ) : isEditing ? (
+            <EditSubscriptionView
+              subscription={subscription}
+              products={products}
+              onCancel={() => setIsEditing(false)}
+              onSaved={() => {
+                setIsEditing(false);
+                onUpdated();
+              }}
+            />
           ) : (
             <>
               {/* Authorized Action Bar */}
@@ -752,6 +770,18 @@ const SubscriptionDetailModal: React.FC<DetailModalProps> = ({
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
+                  {/* Allow editing when in Draft or Quotation status */}
+                  {(subscription.status === 'draft' || subscription.status === 'quotation') && isStaffOrAdmin && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      icon={<Edit2 className="w-3.5 h-3.5" />}
+                      onClick={() => setIsEditing(true)}
+                    >
+                      Edit Terms & Lines
+                    </Button>
+                  )}
+
                   {subscription.status === 'draft' && isStaffOrAdmin && (
                     <>
                       <Button
@@ -1177,6 +1207,303 @@ const SubscriptionDetailModal: React.FC<DetailModalProps> = ({
         </div>
       </div>
     </div>
+  );
+};
+
+// =============================================================================
+// Helper Component: Edit Subscription View
+// =============================================================================
+interface EditSubscriptionViewProps {
+  subscription: Subscription;
+  products: Product[];
+  onCancel: () => void;
+  onSaved: () => void;
+}
+
+const EditSubscriptionView: React.FC<EditSubscriptionViewProps> = ({
+  subscription,
+  products,
+  onCancel,
+  onSaved,
+}) => {
+  const [startDate, setStartDate] = useState(subscription.startDate);
+  const [expiryDate, setExpiryDate] = useState(subscription.expiryDate || '');
+  const [paymentTerms, setPaymentTerms] = useState(subscription.paymentTerms || 'Immediate Payment');
+  const [autoRenew, setAutoRenew] = useState(subscription.autoRenew);
+  const [notes, setNotes] = useState(subscription.notes || '');
+
+  const [lines, setLines] = useState(
+    subscription.lines && subscription.lines.length > 0
+      ? subscription.lines.map((l) => ({
+          productId: l.productId,
+          variantId: l.variantId || undefined,
+          quantity: l.quantity,
+          unitPrice: l.unitPrice,
+          subtotal: l.subtotalAmount,
+        }))
+      : [
+          {
+            productId: products[0]?.id || 1,
+            variantId: products[0]?.variants?.[0]?.id,
+            quantity: 1,
+            unitPrice: products[0]?.salesPrice || 450,
+            subtotal: products[0]?.salesPrice || 450,
+          },
+        ]
+  );
+
+  const [isSaving, setIsSaving] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+
+  const handleAddLine = () => {
+    const firstProd = products[0];
+    if (!firstProd) return;
+    setLines((prev) => [
+      ...prev,
+      {
+        productId: firstProd.id,
+        variantId: firstProd.variants?.[0]?.id,
+        quantity: 1,
+        unitPrice: firstProd.salesPrice,
+        subtotal: firstProd.salesPrice,
+      },
+    ]);
+  };
+
+  const handleRemoveLine = (idx: number) => {
+    setLines((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const handleLineChange = (idx: number, field: string, value: any) => {
+    setLines((prev) => {
+      const copy = [...prev];
+      const line = { ...copy[idx] };
+
+      if (field === 'productId') {
+        const prod = products.find((p) => p.id === Number(value));
+        line.productId = Number(value);
+        line.variantId = prod?.variants?.[0]?.id;
+        line.unitPrice = prod?.salesPrice || 0;
+      } else if (field === 'variantId') {
+        line.variantId = value ? Number(value) : undefined;
+        const prod = products.find((p) => p.id === line.productId);
+        const variant = prod?.variants?.find((v) => v.id === line.variantId);
+        line.unitPrice = (prod?.salesPrice || 0) + (variant?.priceAdjustment || 0);
+      } else if (field === 'quantity') {
+        line.quantity = Math.max(1, parseInt(value, 10) || 1);
+      }
+
+      line.subtotal = line.quantity * line.unitPrice;
+      copy[idx] = line;
+      return copy;
+    });
+  };
+
+  const calculatedSubtotal = lines.reduce((acc, l) => acc + l.subtotal, 0);
+  const estimatedTax = calculatedSubtotal * 0.18;
+  const estimatedTotal = calculatedSubtotal + estimatedTax;
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setEditError(null);
+    setIsSaving(true);
+    try {
+      await updateSubscription(subscription.id, {
+        startDate,
+        expiryDate: expiryDate || undefined,
+        paymentTerms,
+        autoRenew,
+        notes,
+        lines: lines.map((l) => ({
+          productId: l.productId,
+          variantId: l.variantId,
+          quantity: l.quantity,
+        })),
+      });
+      onSaved();
+    } catch (err: any) {
+      setEditError(err.message || 'Failed to update subscription.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSave} className="space-y-4">
+      <div className="flex items-center justify-between bg-amber-50 border border-amber-200 p-3 rounded-xl text-amber-900">
+        <span className="font-semibold text-xs flex items-center gap-1.5">
+          <Edit2 className="w-4 h-4 text-amber-600" />
+          Editing Draft / Quotation Contract Terms
+        </span>
+        <span className="text-[11px] text-amber-700">Authoritative server prices will be re-evaluated on save</span>
+      </div>
+
+      {editError && <ErrorAlert message={editError} onDismiss={() => setEditError(null)} />}
+
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="block text-xs font-semibold text-slate-700 mb-1">Start Date</label>
+          <input
+            type="date"
+            required
+            value={startDate}
+            onChange={(e) => setStartDate(e.target.value)}
+            className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:bg-white text-xs"
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-semibold text-slate-700 mb-1">Expiry Date (Optional)</label>
+          <input
+            type="date"
+            value={expiryDate}
+            onChange={(e) => setExpiryDate(e.target.value)}
+            className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:bg-white text-xs"
+          />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="block text-xs font-semibold text-slate-700 mb-1">Payment Terms</label>
+          <select
+            value={paymentTerms}
+            onChange={(e) => setPaymentTerms(e.target.value)}
+            className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:bg-white text-xs"
+          >
+            <option value="Immediate Payment">Immediate Payment</option>
+            <option value="Net 15">Net 15 Days</option>
+            <option value="Net 30">Net 30 Days</option>
+            <option value="Net 60">Net 60 Days</option>
+          </select>
+        </div>
+        <div className="flex items-center pt-5">
+          <label className="inline-flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={autoRenew}
+              onChange={(e) => setAutoRenew(e.target.checked)}
+              className="rounded text-indigo-600"
+            />
+            <span className="font-semibold text-slate-700">Auto-Renew on Expiry</span>
+          </label>
+        </div>
+      </div>
+
+      {/* Lines Editor */}
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <label className="font-semibold text-slate-700 text-xs">Contract Line Items</label>
+          <button
+            type="button"
+            onClick={handleAddLine}
+            className="text-indigo-600 hover:text-indigo-800 font-semibold text-[11px] inline-flex items-center gap-1"
+          >
+            <Plus className="w-3.5 h-3.5" /> Add Line
+          </button>
+        </div>
+
+        <div className="space-y-2">
+          {lines.map((line, idx) => {
+            const prod = products.find((p) => p.id === line.productId);
+            return (
+              <div
+                key={idx}
+                className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center gap-2"
+              >
+                <div className="flex-1">
+                  <select
+                    value={line.productId}
+                    onChange={(e) => handleLineChange(idx, 'productId', e.target.value)}
+                    className="w-full px-2 py-1 bg-white border border-slate-300 rounded text-xs"
+                  >
+                    {products.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} (${p.salesPrice})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {prod && prod.variants && prod.variants.length > 0 && (
+                  <div className="w-40">
+                    <select
+                      value={line.variantId || ''}
+                      onChange={(e) => handleLineChange(idx, 'variantId', e.target.value)}
+                      className="w-full px-2 py-1 bg-white border border-slate-300 rounded text-xs"
+                    >
+                      <option value="">No Variant</option>
+                      {prod.variants.map((v) => (
+                        <option key={v.id} value={v.id}>
+                          {v.attributeValue} (+${v.priceAdjustment})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
+                <div className="w-16">
+                  <input
+                    type="number"
+                    min={1}
+                    value={line.quantity}
+                    onChange={(e) => handleLineChange(idx, 'quantity', e.target.value)}
+                    className="w-full px-2 py-1 bg-white border border-slate-300 rounded text-xs text-center"
+                  />
+                </div>
+
+                <div className="w-20 font-mono text-right font-bold text-slate-800">
+                  ${line.subtotal.toFixed(2)}
+                </div>
+
+                {lines.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => handleRemoveLine(idx)}
+                    className="text-slate-400 hover:text-rose-600 p-1"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div>
+        <label className="block text-xs font-semibold text-slate-700 mb-1">Contract Notes (Optional)</label>
+        <textarea
+          rows={2}
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-lg focus:bg-white text-xs"
+        />
+      </div>
+
+      <div className="p-3 bg-slate-100/70 border border-slate-200 rounded-xl space-y-1 text-slate-700 text-xs">
+        <div className="flex justify-between">
+          <span>Estimated Subtotal:</span>
+          <span className="font-mono">${calculatedSubtotal.toFixed(2)}</span>
+        </div>
+        <div className="flex justify-between text-slate-500">
+          <span>Estimated Tax (Standard 18%):</span>
+          <span className="font-mono">${estimatedTax.toFixed(2)}</span>
+        </div>
+        <div className="flex justify-between font-bold text-slate-900 border-t border-slate-200 pt-1">
+          <span>Estimated Recurring Total:</span>
+          <span className="font-mono text-indigo-700">${estimatedTotal.toFixed(2)}</span>
+        </div>
+      </div>
+
+      <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+        <Button variant="outline" size="sm" type="button" onClick={onCancel} disabled={isSaving}>
+          Cancel Edit
+        </Button>
+        <Button variant="primary" size="sm" type="submit" isLoading={isSaving}>
+          Save Changes
+        </Button>
+      </div>
+    </form>
   );
 };
 

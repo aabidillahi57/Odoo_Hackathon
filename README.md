@@ -482,6 +482,50 @@ If `BREVO_API_KEY` is unset or is a placeholder:
 
 ---
 
+## Invoicing, Tax Snapshots & Recurring Billing Engine (Part 7)
+
+### 1. Concurrency-Safe Invoice Sequence Numbering
+- **Format:** `INV-YYYY-XXXX` (e.g. `INV-2026-0001`, `INV-2026-0002`).
+- **Generation Strategy:** Server-managed, database-backed sequence using MySQL table `invoice_sequences (sequence_year, last_number)`.
+- **Atomic Concurrency Protection:** Generates numbers inside an active transaction via `SELECT last_number FROM invoice_sequences WHERE sequence_year = ? FOR UPDATE;`. This strictly avoids race conditions and collisions present in `MAX(id) + 1` patterns.
+- **Permanent Consumption:** Numbers are permanently incremented and consumed. Cancelled, refunded, or deleted invoices never cause number reuse, maintaining strict accounting audit compliance.
+
+### 2. Idempotency Key & Duplicate Prevention
+- **Database Engine Guarantee:** Invoices enforce a unique constraint across subscription cycles:
+  ```sql
+  UNIQUE KEY uq_invoice_subscription_period (subscription_id, billing_period_start, billing_period_end)
+  ```
+- **Why this is resilient:** The engine prevents duplicate invoice creation at the database transaction layer. Unlike in-memory locks or client-side flags that fail under multiple serverless function instances or process restarts, this constraint guarantees absolute idempotency across network retries, parallel workers, and repeated manual billing runs.
+- **Safe Retries:** When a billing run encounters a cycle that has already been generated, it records the subscription as `skipped` / `already_invoiced` without throwing unhandled exceptions or halting other subscriptions in the batch.
+
+### 3. Billing Interval Calculation & Month-End Clamping Rules
+The recurring billing engine calculates the active billing period `[periodStart, periodEnd]` and subsequent `nextBillingDate` based on subscription interval configuration:
+- **Daily:** `periodEnd = periodStart`, `nextBillingDate = periodStart + 1 day`.
+- **Weekly:** For interval count $N$, `periodEnd = periodStart + (7 \times N - 1) \text{ days}`, `nextBillingDate = periodStart + (7 \times N) \text{ days}`.
+- **Monthly with Month-End Clamping:**
+  - Standard JavaScript date manipulation (`setMonth(month + 1)`) causes subtle date skip bugs when originating on month-end dates (e.g., adding 1 month to January 31 results in March 3 in non-leap years because February lacks 31 days).
+  - Brightloop implements **calendar month-end clamping**:
+    $$\text{Target Day} = \min(\text{Start Day}, \text{Days in Target Month})$$
+  - *Example 1:* Subscription starting on **January 31, 2026** (1 month interval):
+    - Target month is February 2026 (28 days). Clamped day is $\min(31, 28) = 28$.
+    - Billing Period: `2026-01-31` to `2026-02-27`.
+    - Next Billing Date: `2026-02-28`.
+  - *Example 2:* Leap Year handling on **January 31, 2024**:
+    - Clamped day is $\min(31, 29) = 29$.
+    - Billing Period: `2024-01-31` to `2024-02-28`.
+    - Next Billing Date: `2024-02-29`.
+- **Yearly:** Extends year by interval count $N$, with February 29 leap day clamping to February 28 on non-leap renewal years.
+
+### 4. Tax Rules & Historical Snapshot Protection
+- **Pre-Tax Calculation Model:** Brightloop applies taxes to pre-tax prices:
+  $$\text{Line Subtotal} = \text{round}(\text{Quantity} \times \text{Unit Price}, 2)$$
+  $$\text{Line Tax} = \text{round}(\text{Line Subtotal} \times (\text{Tax Rate} / 100), 2)$$
+  $$\text{Line Total} = \text{Line Subtotal} + \text{Line Tax}$$
+- **Snapshot Immutability:** When an invoice is created, `invoice_lines` saves an immutable snapshot of both `tax_name` (e.g., `"GST Standard"`) and `tax_rate` (e.g., `18.00`).
+- **Protection Against Rate Changes:** If an Administrator later modifies or deactivates a tax rate (e.g., increasing GST from 18% to 20%), previously issued invoices retain their original snapshots. Historical financial records, tax audit reports, and customer receipts remain untouched and legally accurate.
+
+---
+
 ## Project Roadmap & Next Steps
 
 See [`TASKS.md`](file:///Users/harshthakur/Odoo_Hackathon/TASKS.md) for the detailed step-by-step implementation checklist.
@@ -491,8 +535,11 @@ See [`TASKS.md`](file:///Users/harshthakur/Odoo_Hackathon/TASKS.md) for the deta
 - Phase 2: Frontend Foundation & Navigation Shell
 - Phase 3: MySQL Database Foundation & Server-Side API Layer
 - Phase 4: Authentication, Security & Role-Based Access Control (RBAC)
+- Phase 5: Customers & Quotation Templates (Issuance Dependencies)
+- Phase 6: Subscriptions & Lifecycle State Machine
+- Phase 7: Tax Rules, Invoicing & Recurring Billing Engine
 
-**Next Step (Phase 5): Customers & Quotation Templates**
-- Backend CRUD for Customers (searchable, filterable, linked to user accounts)
-- Quotation Templates backend (presets with default plans, line items, validity duration)
-- Internal Staff UI: Customer directory, detail view, quotation template manager
+**Next Step (Phase 8): Payments Recording, Collections & Finance Dashboard**
+- Payment collection recording (`POST /api/payments`) with methods (credit card, bank transfer, cash)
+- Automatic reconciliation of `amount_paid`, `balance_due`, and transition to `Paid` status
+- Finance Dashboard with ARR/MRR metrics, outstanding receivables, and aging indicators

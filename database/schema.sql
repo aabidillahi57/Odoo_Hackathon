@@ -126,6 +126,7 @@ CREATE TABLE IF NOT EXISTS taxes (
     id INT AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(100) NOT NULL,
     rate_percentage DECIMAL(5, 2) NOT NULL DEFAULT 0.00,
+    description VARCHAR(255) NULL,
     is_active BOOLEAN NOT NULL DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -353,10 +354,34 @@ CREATE TABLE IF NOT EXISTS subscription_history (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- -----------------------------------------------------------------------------
--- 9. Invoices & Invoice Lines
--- Generated recurringly from subscriptions or confirmed quotations.
+-- 9. Invoices, Sequences, Lines & Recurring Billing Runs
+-- Generated recurringly from subscriptions or manual billing runs.
 -- Lifecycle: draft -> confirmed -> paid (or cancelled).
 -- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS invoice_sequences (
+    sequence_year INT PRIMARY KEY,
+    last_number INT NOT NULL DEFAULT 0,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS billing_runs (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    run_number VARCHAR(50) NOT NULL UNIQUE,
+    as_of_date DATE NOT NULL,
+    status ENUM('completed', 'failed', 'partial') NOT NULL DEFAULT 'completed',
+    processed_count INT NOT NULL DEFAULT 0,
+    created_count INT NOT NULL DEFAULT 0,
+    skipped_count INT NOT NULL DEFAULT 0,
+    failed_count INT NOT NULL DEFAULT 0,
+    total_invoiced_amount DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
+    triggered_by INT NULL,
+    details JSON NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_billing_runs_user FOREIGN KEY (triggered_by) REFERENCES users (id) ON DELETE SET NULL,
+    INDEX idx_billing_runs_date (as_of_date),
+    INDEX idx_billing_runs_created (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS invoices (
     id INT AUTO_INCREMENT PRIMARY KEY,
     invoice_number VARCHAR(50) NOT NULL UNIQUE,
@@ -376,10 +401,18 @@ CREATE TABLE IF NOT EXISTS invoices (
     balance_due DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
     notes TEXT NULL,
     sent_at DATETIME NULL,
+    delivery_status ENUM('pending', 'sent', 'failed') NULL DEFAULT NULL,
+    delivery_error VARCHAR(255) NULL,
+    cancellation_reason TEXT NULL,
+    confirmed_at DATETIME NULL,
+    cancelled_at DATETIME NULL,
+    created_by INT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     CONSTRAINT fk_invoices_subscription FOREIGN KEY (subscription_id) REFERENCES subscriptions (id) ON DELETE SET NULL,
     CONSTRAINT fk_invoices_customer FOREIGN KEY (customer_id) REFERENCES customers (id) ON DELETE RESTRICT,
+    CONSTRAINT fk_invoices_created_by FOREIGN KEY (created_by) REFERENCES users (id) ON DELETE SET NULL,
+    UNIQUE KEY uq_invoice_subscription_period (subscription_id, billing_period_start, billing_period_end),
     INDEX idx_invoices_subscription (subscription_id),
     INDEX idx_invoices_customer (customer_id),
     INDEX idx_invoices_status (status),
@@ -396,6 +429,7 @@ CREATE TABLE IF NOT EXISTS invoice_lines (
     quantity INT NOT NULL DEFAULT 1,
     unit_price DECIMAL(12, 2) NOT NULL,
     tax_id INT NULL,
+    tax_name VARCHAR(100) NULL,
     tax_rate DECIMAL(5, 2) NOT NULL DEFAULT 0.00,
     tax_amount DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
     discount_amount DECIMAL(12, 2) NOT NULL DEFAULT 0.00,

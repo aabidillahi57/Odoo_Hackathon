@@ -123,6 +123,67 @@ async function runMigration() {
     if (!lineColNames.includes('tax_rate')) {
       await connection.query("ALTER TABLE subscription_lines ADD COLUMN tax_rate DECIMAL(5, 2) NOT NULL DEFAULT 0.00;");
     }
+
+    // Part 7: Invoicing & Taxes incremental migrations
+    const [taxCols] = await connection.query(`
+      SELECT COLUMN_NAME FROM information_schema.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'taxes';
+    `);
+    const taxColNames = taxCols.map((c) => c.COLUMN_NAME);
+    if (!taxColNames.includes('description')) {
+      await connection.query("ALTER TABLE taxes ADD COLUMN description VARCHAR(255) NULL;");
+    }
+
+    const [invCols] = await connection.query(`
+      SELECT COLUMN_NAME FROM information_schema.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'invoices';
+    `);
+    const invColNames = invCols.map((c) => c.COLUMN_NAME);
+    if (!invColNames.includes('delivery_status')) {
+      await connection.query("ALTER TABLE invoices ADD COLUMN delivery_status ENUM('pending', 'sent', 'failed') NULL DEFAULT NULL;");
+    }
+    if (!invColNames.includes('delivery_error')) {
+      await connection.query("ALTER TABLE invoices ADD COLUMN delivery_error VARCHAR(255) NULL;");
+    }
+    if (!invColNames.includes('cancellation_reason')) {
+      await connection.query("ALTER TABLE invoices ADD COLUMN cancellation_reason TEXT NULL;");
+    }
+    if (!invColNames.includes('confirmed_at')) {
+      await connection.query("ALTER TABLE invoices ADD COLUMN confirmed_at DATETIME NULL;");
+    }
+    if (!invColNames.includes('cancelled_at')) {
+      await connection.query("ALTER TABLE invoices ADD COLUMN cancelled_at DATETIME NULL;");
+    }
+    if (!invColNames.includes('created_by')) {
+      await connection.query("ALTER TABLE invoices ADD COLUMN created_by INT NULL;");
+      try {
+        await connection.query("ALTER TABLE invoices ADD CONSTRAINT fk_invoices_created_by FOREIGN KEY (created_by) REFERENCES users (id) ON DELETE SET NULL;");
+      } catch {
+        // Ignore if constraint exists
+      }
+    }
+
+    // Add unique constraint for subscription idempotency if not present
+    try {
+      const [invIndexes] = await connection.query(`
+        SHOW INDEX FROM invoices WHERE Key_name = 'uq_invoice_subscription_period';
+      `);
+      if (invIndexes.length === 0) {
+        await connection.query("ALTER TABLE invoices ADD CONSTRAINT uq_invoice_subscription_period UNIQUE (subscription_id, billing_period_start, billing_period_end);");
+      }
+    } catch {
+      // Ignore if index exists
+    }
+
+    const [invLineCols] = await connection.query(`
+      SELECT COLUMN_NAME FROM information_schema.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'invoice_lines';
+    `);
+    const invLineColNames = invLineCols.map((c) => c.COLUMN_NAME);
+    if (!invLineColNames.includes('tax_name')) {
+      await connection.query("ALTER TABLE invoice_lines ADD COLUMN tax_name VARCHAR(100) NULL;");
+    }
+
     console.log('✓ Incremental schema migrations verified.');
 
     // 3. Optional Seed Data

@@ -14,6 +14,7 @@ import {
   PauseCircle,
   PlayCircle,
   X,
+  Printer,
 } from 'lucide-react';
 import { Card } from '../../components/common/Card';
 import { Button } from '../../components/common/Button';
@@ -21,7 +22,13 @@ import { Badge } from '../../components/common/Badge';
 import { ErrorAlert } from '../../components/common/ErrorAlert';
 import { LoadingSpinner } from '../../components/common/LoadingSpinner';
 import { useAuth } from '../../context/AuthContext';
-import { useSubscriptions, useSubscription, transitionSubscription } from '../../services/api';
+import {
+  useSubscriptions,
+  useSubscription,
+  transitionSubscription,
+  useInvoices,
+  useInvoiceDetail,
+} from '../../services/api';
 
 export const CustomerPortalPage: React.FC = () => {
   const { user, login, logout, isAuthenticated, isLoading } = useAuth();
@@ -56,6 +63,15 @@ export const CustomerPortalPage: React.FC = () => {
 
   const { subscription: selectedSub, isLoading: isLoadingDetail, refetch: refetchDetail } =
     useSubscription(selectedSubId);
+
+  // Invoices Query (strictly isolated by server session)
+  const [selectedInvoiceId, setSelectedInvoiceId] = useState<number | null>(null);
+  const { invoices: customerInvoices, isLoading: isLoadingInvoices } = useInvoices({
+    page: 1,
+    limit: 50,
+  });
+  const { invoice: selectedInvoice, isLoading: isLoadingInvoiceDetail } =
+    useInvoiceDetail(selectedInvoiceId);
 
   const handleSignIn = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -270,15 +286,90 @@ export const CustomerPortalPage: React.FC = () => {
                 title="My Invoices & Receipts"
                 description="Download previous statements, view balance due, and track payments."
               >
-                <div className="p-8 border-2 border-dashed border-slate-200 rounded-lg text-center bg-slate-50/50">
-                  <div className="w-10 h-10 rounded-full bg-white border border-slate-200 mx-auto flex items-center justify-center text-slate-400 mb-3 shadow-xs">
-                    <Receipt className="w-5 h-5 text-emerald-600" />
+                {isLoadingInvoices ? (
+                  <div className="p-8 text-center">
+                    <LoadingSpinner label="Loading your invoices..." />
                   </div>
-                  <h4 className="text-sm font-semibold text-slate-800">Your Billing Receipts</h4>
-                  <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1">
-                    Official statements and payment histories will populate here automatically upon generation in Phase 7.
-                  </p>
-                </div>
+                ) : customerInvoices && customerInvoices.length > 0 ? (
+                  <div className="space-y-3">
+                    {customerInvoices.map((inv) => (
+                      <div
+                        key={inv.id}
+                        onClick={() => setSelectedInvoiceId(inv.id)}
+                        className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl hover:border-emerald-300 hover:shadow-xs transition-all cursor-pointer flex items-center justify-between text-xs"
+                      >
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <Receipt className="w-3.5 h-3.5 text-emerald-600" />
+                            <strong className="font-mono text-slate-900">{inv.invoiceNumber}</strong>
+                            <Badge
+                              variant={
+                                inv.status === 'paid'
+                                  ? 'success'
+                                  : inv.status === 'confirmed'
+                                  ? 'info'
+                                  : inv.status === 'cancelled'
+                                  ? 'danger'
+                                  : 'neutral'
+                              }
+                              size="sm"
+                            >
+                              {inv.status}
+                            </Badge>
+                            {inv.isOverdue && (
+                              <Badge variant="warning" size="sm">
+                                Overdue
+                              </Badge>
+                            )}
+                          </div>
+                          <div className="text-[11px] text-slate-500">
+                            Issued: {inv.issueDate} &bull; Due: {inv.dueDate}
+                          </div>
+                          {inv.subscriptionNumber && (
+                            <div className="text-[11px] text-slate-400">
+                              Sub: {inv.subscriptionNumber}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="text-right space-y-1">
+                          <div className="font-mono font-bold text-slate-900 text-sm">
+                            ${inv.totalAmount.toFixed(2)}
+                          </div>
+                          <div className="text-[11px]">
+                            {inv.balanceDue > 0 ? (
+                              <span className="text-amber-700 font-semibold">
+                                Balance: ${inv.balanceDue.toFixed(2)}
+                              </span>
+                            ) : (
+                              <span className="text-emerald-700 font-semibold">Paid in full</span>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedInvoiceId(inv.id);
+                            }}
+                            className="text-emerald-700 font-semibold text-[11px] hover:underline"
+                          >
+                            View Statement →
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="p-8 border-2 border-dashed border-slate-200 rounded-lg text-center bg-slate-50/50">
+                    <div className="w-10 h-10 rounded-full bg-white border border-slate-200 mx-auto flex items-center justify-center text-slate-400 mb-3 shadow-xs">
+                      <Receipt className="w-5 h-5 text-emerald-600" />
+                    </div>
+                    <h4 className="text-sm font-semibold text-slate-800">No Invoices Issued</h4>
+                    <p className="text-xs text-slate-500 max-w-sm mx-auto mt-1">
+                      No invoices have been issued to your customer account yet. When recurring cycles process, your official receipts will appear here.
+                    </p>
+                  </div>
+                )}
               </Card>
             </div>
 
@@ -606,6 +697,153 @@ export const CustomerPortalPage: React.FC = () => {
                 className="bg-emerald-600 hover:bg-emerald-700"
               >
                 Confirm
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* Customer Invoice Detail & Receipt Modal                                   */}
+      {/* ========================================================================= */}
+      {selectedInvoiceId && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-xl max-w-2xl w-full p-6 space-y-5 border border-slate-200 animate-in fade-in zoom-in-95 my-auto text-xs">
+            <div className="flex items-start justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center">
+                  <Receipt className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base font-bold text-slate-900">
+                      {selectedInvoice?.invoiceNumber || `Invoice #${selectedInvoiceId}`}
+                    </h3>
+                    {selectedInvoice && (
+                      <Badge
+                        variant={
+                          selectedInvoice.status === 'paid'
+                            ? 'success'
+                            : selectedInvoice.status === 'confirmed'
+                            ? 'info'
+                            : 'neutral'
+                        }
+                      >
+                        {selectedInvoice.status}
+                      </Badge>
+                    )}
+                  </div>
+                  <p className="text-slate-500 text-[11px]">Official Billing Receipt & Statement</p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  icon={<Printer className="w-3.5 h-3.5" />}
+                  onClick={() => window.print()}
+                >
+                  Print Receipt
+                </Button>
+                <button
+                  onClick={() => setSelectedInvoiceId(null)}
+                  className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {isLoadingInvoiceDetail ? (
+              <div className="py-12 text-center">
+                <LoadingSpinner label="Loading invoice receipt..." />
+              </div>
+            ) : selectedInvoice ? (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-3 p-3 bg-slate-50 rounded-xl border border-slate-200">
+                  <div>
+                    <span className="text-slate-500">Issue Date:</span>
+                    <div className="font-bold text-slate-900">{selectedInvoice.issueDate}</div>
+                  </div>
+                  <div>
+                    <span className="text-slate-500">Due Date:</span>
+                    <div className="font-bold text-slate-900">{selectedInvoice.dueDate}</div>
+                  </div>
+                  <div>
+                    <span className="text-slate-500">Payment Terms:</span>
+                    <div className="font-medium text-slate-800">{selectedInvoice.paymentTerms || 'Immediate Payment'}</div>
+                  </div>
+                  <div>
+                    <span className="text-slate-500">Subscription Ref:</span>
+                    <div className="font-mono text-emerald-700">{selectedInvoice.subscriptionNumber || 'Ad-hoc'}</div>
+                  </div>
+                </div>
+
+                {/* Line Items */}
+                <div className="border border-slate-200 rounded-xl overflow-hidden">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider">
+                        <th className="py-2 px-3">Item Description</th>
+                        <th className="py-2 px-3 text-center">Qty</th>
+                        <th className="py-2 px-3 text-right">Unit Price</th>
+                        <th className="py-2 px-3 text-right">Tax</th>
+                        <th className="py-2 px-3 text-right">Total</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {selectedInvoice.lines?.map((line) => (
+                        <tr key={line.id}>
+                          <td className="py-2 px-3">
+                            <span className="font-semibold text-slate-800">{line.description}</span>
+                            {line.variantName && (
+                              <div className="text-[11px] text-emerald-700">{line.variantName}</div>
+                            )}
+                          </td>
+                          <td className="py-2 px-3 text-center font-mono">{line.quantity}</td>
+                          <td className="py-2 px-3 text-right font-mono">${line.unitPrice.toFixed(2)}</td>
+                          <td className="py-2 px-3 text-right font-mono text-slate-500">${line.taxAmount.toFixed(2)}</td>
+                          <td className="py-2 px-3 text-right font-mono font-bold text-slate-900">
+                            ${line.totalAmount.toFixed(2)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot className="bg-slate-50 border-t border-slate-200 text-xs">
+                      <tr>
+                        <td colSpan={4} className="py-1.5 px-3 text-right text-slate-500">
+                          Subtotal (Pre-Tax):
+                        </td>
+                        <td className="py-1.5 px-3 text-right font-mono text-slate-800">
+                          ${(selectedInvoice.subtotalAmount || 0).toFixed(2)}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td colSpan={4} className="py-1.5 px-3 text-right text-slate-500">
+                          Total Taxes:
+                        </td>
+                        <td className="py-1.5 px-3 text-right font-mono text-slate-800">
+                          ${(selectedInvoice.taxAmount || 0).toFixed(2)}
+                        </td>
+                      </tr>
+                      <tr className="font-bold border-t border-slate-200">
+                        <td colSpan={4} className="py-2 px-3 text-right text-slate-900">
+                          Total Due:
+                        </td>
+                        <td className="py-2 px-3 text-right font-mono text-emerald-700 text-sm">
+                          ${selectedInvoice.totalAmount.toFixed(2)}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+            ) : null}
+
+            <div className="flex justify-end pt-2 border-t border-slate-100">
+              <Button variant="outline" size="sm" onClick={() => setSelectedInvoiceId(null)}>
+                Close
               </Button>
             </div>
           </div>

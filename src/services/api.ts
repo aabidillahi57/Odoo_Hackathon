@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Product, Plan, Customer, Subscription, QuotationTemplate } from '../types';
+import { Product, Plan, Customer, Subscription, QuotationTemplate, Tax, Invoice, BillingRunSummary } from '../types';
 
 export interface HealthStatus {
   status: string;
@@ -411,3 +411,248 @@ export async function issueSubscriptionFromTemplate(
     body: JSON.stringify(payload),
   });
 }
+
+// =============================================================================
+// Part 7: Tax Rules API Hooks & Mutations
+// =============================================================================
+
+/**
+ * Hook to fetch configured tax rules
+ */
+export function useTaxes(activeOnly?: boolean) {
+  const [taxes, setTaxes] = useState<Tax[] | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchTaxes = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const endpoint = activeOnly ? 'taxes?active_only=true' : 'taxes';
+      const { data } = await fetchApi<{ taxes: Tax[]; count: number }>(endpoint);
+      setTaxes(data.taxes);
+    } catch (err: any) {
+      setError(err.message);
+      setTaxes(null);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [activeOnly]);
+
+  useEffect(() => {
+    fetchTaxes();
+  }, [fetchTaxes]);
+
+  return { taxes, isLoading, error, refetch: fetchTaxes };
+}
+
+/**
+ * Mutation: Create a tax rule (Admin only)
+ */
+export async function createTax(payload: {
+  name: string;
+  ratePercentage: number;
+  description?: string;
+  isActive?: boolean;
+}) {
+  return fetchApi<{ message: string; tax: Tax }>('taxes', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+/**
+ * Mutation: Update or deactivate a tax rule (Admin only)
+ */
+export async function updateTax(
+  id: number,
+  payload: {
+    name?: string;
+    ratePercentage?: number;
+    description?: string;
+    isActive?: boolean;
+  }
+) {
+  return fetchApi<{ message: string; tax: Tax }>(`taxes/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  });
+}
+
+// =============================================================================
+// Part 7: Invoices & Billing Run API Hooks & Mutations
+// =============================================================================
+
+export interface InvoicesFilterParams {
+  status?: string;
+  search?: string;
+  customerId?: number;
+  subscriptionId?: number;
+  overdue?: boolean;
+  page?: number;
+  limit?: number;
+}
+
+/**
+ * Hook to fetch paginated invoices with search and filters
+ */
+export function useInvoices(filters: InvoicesFilterParams = {}) {
+  const [invoices, setInvoices] = useState<Invoice[] | null>(null);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const { status, search, customerId, subscriptionId, overdue, page = 1, limit = 20 } = filters;
+
+  const fetchInvoices = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const params = new URLSearchParams();
+      if (status && status !== 'all') params.append('status', status);
+      if (search) params.append('search', search);
+      if (customerId) params.append('customer_id', customerId.toString());
+      if (subscriptionId) params.append('subscription_id', subscriptionId.toString());
+      if (overdue) params.append('overdue', 'true');
+      params.append('page', page.toString());
+      params.append('limit', limit.toString());
+
+      const queryStr = params.toString();
+      const endpoint = queryStr ? `invoices?${queryStr}` : 'invoices';
+      const { data } = await fetchApi<{
+        invoices: Invoice[];
+        total: number;
+        page: number;
+        limit: number;
+        totalPages: number;
+      }>(endpoint);
+
+      setInvoices(data.invoices);
+      setTotal(data.total);
+      setTotalPages(data.totalPages);
+    } catch (err: any) {
+      setError(err.message);
+      setInvoices(null);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [status, search, customerId, subscriptionId, overdue, page, limit]);
+
+  useEffect(() => {
+    fetchInvoices();
+  }, [fetchInvoices]);
+
+  return { invoices, total, totalPages, page, limit, isLoading, error, refetch: fetchInvoices };
+}
+
+/**
+ * Hook to fetch single invoice details
+ */
+export function useInvoiceDetail(id?: number | null) {
+  const [invoice, setInvoice] = useState<Invoice | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchInvoice = useCallback(async () => {
+    if (!id) {
+      setInvoice(null);
+      return;
+    }
+    setIsLoading(true);
+    setError(null);
+    try {
+      const { data } = await fetchApi<{ invoice: Invoice }>(`invoices/${id}`);
+      setInvoice(data.invoice);
+    } catch (err: any) {
+      setError(err.message);
+      setInvoice(null);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [id]);
+
+  useEffect(() => {
+    fetchInvoice();
+  }, [fetchInvoice]);
+
+  return { invoice, isLoading, error, refetch: fetchInvoice };
+}
+
+/**
+ * Mutation: Confirm a draft invoice
+ */
+export async function confirmInvoice(id: number) {
+  return fetchApi<{ message: string; status: string }>(`invoices/${id}/confirm`, {
+    method: 'POST',
+  });
+}
+
+/**
+ * Mutation: Cancel an issued invoice with reason
+ */
+export async function cancelInvoice(id: number, reason: string) {
+  return fetchApi<{ message: string; status: string }>(`invoices/${id}/cancel`, {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  });
+}
+
+/**
+ * Mutation: Send invoice notification email via Brevo
+ */
+export async function sendInvoiceEmailDispatch(id: number) {
+  return fetchApi<{
+    message: string;
+    deliveryStatus: string;
+    devMode?: boolean;
+    error?: string;
+  }>(`invoices/${id}/send`, {
+    method: 'POST',
+  });
+}
+
+/**
+ * Mutation: Create manual invoice
+ */
+export async function createManualInvoice(payload: {
+  customerId: number;
+  subscriptionId?: number | null;
+  issueDate?: string;
+  dueDate?: string;
+  paymentTerms?: string;
+  notes?: string;
+  status?: 'draft' | 'confirmed';
+  lines: Array<{
+    productId: number;
+    variantId?: number | null;
+    description: string;
+    quantity: number;
+    unitPrice: number;
+    taxId?: number | null;
+    taxRate?: number;
+    taxName?: string;
+  }>;
+}) {
+  return fetchApi<{
+    message: string;
+    invoiceId: number;
+    invoiceNumber: string;
+    status: string;
+    totalAmount: number;
+  }>('invoices', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+/**
+ * Mutation: Execute recurring billing run
+ */
+export async function triggerBillingRun(payload: { asOfDate?: string; batchLimit?: number } = {}) {
+  return fetchApi<BillingRunSummary>('billing/run', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+

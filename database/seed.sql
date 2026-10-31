@@ -114,3 +114,36 @@ VALUES
     (1, 'EARLYBIRD2026', '15% off first annual contract', 'percentage', 15.00, 1000.00, 1, 50, 14, 'order', TRUE),
     (2, 'ODOOFEST500', 'Flat 500 discount on Odoo Brand Variant addon', 'fixed', 500.00, 560.00, 1, 20, 6, 'product', TRUE)
 ON DUPLICATE KEY UPDATE code=VALUES(code);
+
+-- 11. Invoice Sequences
+INSERT INTO invoice_sequences (sequence_year, last_number)
+VALUES (2026, 3)
+ON DUPLICATE KEY UPDATE last_number=VALUES(last_number);
+
+-- 12. Invoices
+INSERT INTO invoices (
+    id, invoice_number, subscription_id, customer_id, status,
+    billing_period_start, billing_period_end, issue_date, due_date,
+    payment_terms, subtotal_amount, tax_amount, discount_amount, total_amount,
+    amount_paid, balance_due, notes, sent_at, delivery_status, confirmed_at
+)
+VALUES
+    (1, 'INV-2026-0001', 1, 1, 'paid', '2026-01-01', '2026-12-31', '2026-01-01', '2026-01-31', 'Net 30', 5850.00, 1053.00, 0.00, 6903.00, 6903.00, 0.00, 'Annual enterprise billing cycle', '2026-01-01 10:00:00', 'sent', '2026-01-01 09:30:00'),
+    (2, 'INV-2026-0002', 2, 2, 'confirmed', '2026-10-01', '2026-10-31', '2026-10-01', '2026-10-15', 'Immediate Payment', 1050.00, 189.00, 0.00, 1239.00, 0.00, 1239.00, 'Overdue monthly billing cycle', '2026-10-01 12:00:00', 'sent', '2026-10-01 10:00:00'),
+    (3, 'INV-2026-0003', 4, 4, 'draft', '2026-10-01', '2026-10-31', '2026-10-25', '2026-11-10', 'Net 15', 950.00, 171.00, 0.00, 1121.00, 0.00, 1121.00, 'Draft invoice prior to subscription pause', NULL, NULL, NULL)
+ON DUPLICATE KEY UPDATE invoice_number=VALUES(invoice_number);
+
+-- 12b. Invoice Lines
+INSERT INTO invoice_lines (
+    id, invoice_id, product_id, variant_id, description, quantity,
+    unit_price, tax_id, tax_name, tax_rate, tax_amount, subtotal_amount, total_amount
+)
+VALUES
+    (1, 1, 1, 2, 'Brightloop Core License (Odoo Compatible)', 5, 1010.00, 1, 'GST Standard', 18.00, 909.00, 5050.00, 5959.00),
+    (2, 1, 3, NULL, 'Dedicated Technical Account Manager', 1, 800.00, 1, 'GST Standard', 18.00, 144.00, 800.00, 944.00),
+    (3, 2, 1, 1, 'Brightloop Core License (Standard)', 2, 450.00, 1, 'GST Standard', 18.00, 162.00, 900.00, 1062.00),
+    (4, 2, 2, NULL, 'High-Throughput API Gateway', 1, 150.00, 1, 'GST Standard', 18.00, 27.00, 150.00, 177.00),
+    (5, 3, 1, 1, 'Brightloop Core License (Standard)', 1, 450.00, 1, 'GST Standard', 18.00, 81.00, 450.00, 531.00),
+    (6, 3, 3, NULL, 'Dedicated Technical Account Manager (Partial)', 1, 500.00, 1, 'GST Standard', 18.00, 90.00, 500.00, 590.00)
+ON DUPLICATE KEY UPDATE unit_price=VALUES(unit_price);
+

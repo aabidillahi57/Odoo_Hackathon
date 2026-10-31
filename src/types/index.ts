@@ -72,6 +72,16 @@ export type BillingInterval = 'daily' | 'weekly' | 'monthly' | 'yearly';
 export type EarlyClosePolicy = 'allowed' | 'fee_applies' | 'not_allowed';
 export type RenewalPolicy = 'auto_renew' | 'manual_renew' | 'expire_on_end';
 
+export interface Tax {
+  id: number;
+  name: string;
+  ratePercentage: number;
+  description?: string;
+  isActive: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface Plan {
   id: number;
   name: string;
@@ -193,19 +203,97 @@ export interface Subscription {
 
 export type InvoiceStatus = 'draft' | 'confirmed' | 'paid' | 'cancelled';
 
+export interface InvoiceLine {
+  id: number;
+  invoiceId: number;
+  productId: number;
+  productName: string;
+  variantId?: number | null;
+  variantName?: string | null;
+  description: string;
+  quantity: number;
+  unitPrice: number;
+  taxId?: number | null;
+  taxName?: string | null;
+  taxRate: number;
+  taxAmount: number;
+  discountAmount?: number;
+  subtotalAmount: number;
+  totalAmount: number;
+}
+
+export interface InvoiceCustomer {
+  id: number;
+  name: string;
+  companyName?: string | null;
+  email: string;
+  phone?: string | null;
+  addressLine1?: string | null;
+  addressLine2?: string | null;
+  city?: string | null;
+  state?: string | null;
+  postalCode?: string | null;
+  country?: string | null;
+}
+
 export interface Invoice {
   id: number;
   invoiceNumber: string;
-  subscriptionId?: number;
-  subscriptionNumber?: string;
+  subscriptionId?: number | null;
+  subscriptionNumber?: string | null;
   customerId: number;
   customerName: string;
+  companyName?: string | null;
+  customerEmail?: string;
+  customer?: InvoiceCustomer;
   status: InvoiceStatus;
+  isOverdue?: boolean;
+  billingPeriodStart?: string | null;
+  billingPeriodEnd?: string | null;
   issueDate: string;
   dueDate: string;
+  paymentTerms?: string;
+  subtotalAmount?: number;
+  taxAmount?: number;
+  discountAmount?: number;
   totalAmount: number;
   amountPaid: number;
   balanceDue: number;
+  notes?: string;
+  sentAt?: string | null;
+  deliveryStatus?: 'pending' | 'sent' | 'failed' | null;
+  deliveryError?: string | null;
+  cancellationReason?: string | null;
+  confirmedAt?: string | null;
+  cancelledAt?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+  lines?: InvoiceLine[];
+}
+
+export interface BillingRunResultDetail {
+  subscriptionId: number;
+  subscriptionNumber: string;
+  invoiceId?: number;
+  invoiceNumber?: string;
+  period?: string;
+  amount?: number;
+  nextBillingDate?: string;
+  status: 'created' | 'skipped' | 'failed';
+  reason?: string;
+  error?: string;
+}
+
+export interface BillingRunSummary {
+  runNumber: string;
+  asOfDate: string;
+  status: 'completed' | 'partial' | 'failed';
+  processedCount: number;
+  createdCount: number;
+  skippedCount: number;
+  failedCount: number;
+  totalInvoicedAmount: number;
+  details: BillingRunResultDetail[];
 }
 
 export type PaymentMethod = 'credit_card' | 'bank_transfer' | 'cash' | 'other';

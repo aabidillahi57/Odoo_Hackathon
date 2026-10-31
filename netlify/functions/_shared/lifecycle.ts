@@ -151,3 +151,64 @@ export function calculateNextBillingDate(
   return calculateRenewalExpiryDate(startDate, interval, intervalCount);
 }
 
+export interface BillingPeriodResult {
+  periodStart: string; // YYYY-MM-DD
+  periodEnd: string;   // YYYY-MM-DD
+  nextBillingDate: string; // YYYY-MM-DD
+}
+
+/**
+ * Calculates accurate billing period start, end, and next billing date
+ * with robust calendar month-end clamping (e.g. Jan 31 -> Feb 28/29).
+ */
+export function calculateBillingPeriodAndNextDate(
+  periodStartStr: string,
+  interval: 'daily' | 'weekly' | 'monthly' | 'yearly',
+  intervalCount = 1
+): BillingPeriodResult {
+  const parts = periodStartStr.split('-');
+  const startYear = parseInt(parts[0], 10);
+  const startMonth = parseInt(parts[1], 10) - 1; // 0-indexed
+  const startDay = parseInt(parts[2], 10);
+
+  const startDate = new Date(Date.UTC(startYear, startMonth, startDay));
+  let nextDate: Date;
+
+  if (interval === 'daily') {
+    nextDate = new Date(Date.UTC(startYear, startMonth, startDay + intervalCount));
+  } else if (interval === 'weekly') {
+    nextDate = new Date(Date.UTC(startYear, startMonth, startDay + 7 * intervalCount));
+  } else if (interval === 'monthly') {
+    const totalMonths = startMonth + intervalCount;
+    const targetYear = startYear + Math.floor(totalMonths / 12);
+    const targetMonth = ((totalMonths % 12) + 12) % 12;
+    const daysInTargetMonth = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate();
+    const clampedDay = Math.min(startDay, daysInTargetMonth);
+    nextDate = new Date(Date.UTC(targetYear, targetMonth, clampedDay));
+  } else if (interval === 'yearly') {
+    const targetYear = startYear + intervalCount;
+    const daysInTargetMonth = new Date(Date.UTC(targetYear, startMonth + 1, 0)).getUTCDate();
+    const clampedDay = Math.min(startDay, daysInTargetMonth);
+    nextDate = new Date(Date.UTC(targetYear, startMonth, clampedDay));
+  } else {
+    // Default monthly fallback
+    const totalMonths = startMonth + 1;
+    const targetYear = startYear + Math.floor(totalMonths / 12);
+    const targetMonth = ((totalMonths % 12) + 12) % 12;
+    const daysInTargetMonth = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate();
+    const clampedDay = Math.min(startDay, daysInTargetMonth);
+    nextDate = new Date(Date.UTC(targetYear, targetMonth, clampedDay));
+  }
+
+  // Period end is 1 day before the next billing date
+  const periodEndDate = new Date(nextDate.getTime() - 24 * 60 * 60 * 1000);
+  const formatUtc = (d: Date) => d.toISOString().split('T')[0];
+
+  return {
+    periodStart: formatUtc(startDate),
+    periodEnd: formatUtc(periodEndDate),
+    nextBillingDate: formatUtc(nextDate),
+  };
+}
+
+

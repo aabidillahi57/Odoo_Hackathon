@@ -167,21 +167,51 @@ This checklist tracks the implementation progress for the Brightloop Subscriptio
 
 ---
 
-### Phase 7: Recurring Invoicing & Discount Rules Engine
-- [ ] Admin CRUD for Discounts:
-  - [ ] Fixed or percentage discounts
-  - [ ] Constraints: min purchase amount, min quantity, start/end dates, max uses
-  - [ ] Scope: order-level or specific product-level
-- [ ] Billing & Invoice Generation Engine:
-  - [ ] Automated generation of invoices from active subscriptions when billing is due
-  - [ ] Tax calculations based on active tax rules
-  - [ ] Discount validation and automatic application to invoice
-  - [ ] Prevent skipped or duplicate billing cycles (`next_billing_date` progression)
-- [ ] Invoices backend endpoints & lifecycle: `Draft` → `Confirmed` → `Paid` (or `Cancelled`)
-- [ ] Staff UI for Invoicing:
-  - [ ] Invoices list with status badges and due-date filters
-  - [ ] Invoice detail view with line items, tax breakdown, and discount breakdown
-  - [ ] Invoice actions: Confirm, Cancel, Send, Print/PDF export preview
+### Phase 7: Tax Rules, Invoicing & Recurring Billing Engine — **Completed**
+- [x] **Tax Rules Management & Snapshots**:
+  - [x] Admin CRUD endpoints for tax rules (`GET /api/taxes`, `POST /api/taxes`, `PUT /api/taxes/:id`)
+  - [x] Non-tax-inclusive pricing: tax percentages applied to pre-tax prices
+  - [x] Staff accounts granted view-only permissions; Admin accounts manage rates and deactivations
+  - [x] Invoice line items persist immutable snapshots of `tax_name` and `tax_rate` to protect past invoices against rate edits
+- [x] **Database Schema & Migrations**:
+  - [x] `invoice_sequences` table for concurrency-safe atomic sequence tracking (`INV-YYYY-XXXX`)
+  - [x] `billing_runs` audit ledger table recording run numbers, as-of dates, operators, itemized results, and status
+  - [x] `invoices` table updated with `delivery_status`, `delivery_error`, `cancellation_reason`, `confirmed_at`, `cancelled_at`, `created_by`
+  - [x] Database unique constraint `uq_invoice_subscription_period (subscription_id, billing_period_start, billing_period_end)` guaranteeing engine-level duplicate prevention
+  - [x] Repeatable migration `004_invoices_billing.sql`, updated `schema.sql`, and incremental migrations in `scripts/migrate.js`
+- [x] **Concurrency-Safe Invoice Number Sequence**:
+  - [x] Server-side atomic number generator (`INV-YYYY-XXXX`) using database row-level locking (`FOR UPDATE`) within active transaction
+  - [x] Strict persistence: sequence numbers are permanently consumed; cancelled or deleted invoices do not cause reuse
+- [x] **Recurring Billing Engine** (`netlify/functions/billing-run.ts`):
+  - [x] Server-side endpoint `POST /api/billing/run` (Admin and Staff only; 403 Forbidden for Customers)
+  - [x] Selects due `Active` subscriptions where `next_billing_date <= as_of_date` and `expiry_date >= as_of_date`
+  - [x] Excludes Draft, Quotation, Confirmed, Paused, Closed, and expired subscriptions
+  - [x] Bounded batch execution with per-subscription transaction isolation
+  - [x] Robust calendar month-end clamping (e.g. Jan 31 -> Feb 28/29, Mar 31 -> Apr 30) preventing billing interval date skips
+  - [x] Creates confirmed invoices containing customer details, subscription lines, unit prices, tax snapshots, due date, subtotal, and total
+  - [x] Advances `next_billing_date` only after invoice creation transaction commits
+  - [x] Safe retry guarantee: completely immune to duplicate invoice creation across retries
+  - [x] Resilient per-subscription error handling: rollback failed subscription and continue processing remaining batch
+  - [x] Execution metadata and itemized breakdown logged to `billing_runs` table
+- [x] **Invoices API & Lifecycle Actions** (`netlify/functions/invoices.ts`):
+  - [x] `GET /api/invoices` — Search, status filters, dynamic `isOverdue` calculation; customer role strictly scoped to own records
+  - [x] `GET /api/invoices/:id` — Full invoice detail with customer contact info, billing period, and line items; IDOR protected
+  - [x] `POST /api/invoices` — Manual invoice creation with line items and tax calculation
+  - [x] `POST /api/invoices/:id/confirm` — Transitions Draft invoice to Confirmed with timestamp
+  - [x] `POST /api/invoices/:id/cancel` — Cancels invoice with required audit reason; validates no payments collected
+  - [x] `POST /api/invoices/:id/send` — Transactional invoice dispatch via Brevo REST API v3
+- [x] **Brevo Transactional Invoice Email Integration** (`netlify/functions/_shared/brevo.ts`):
+  - [x] `sendInvoiceEmail()` — Branded transactional invoice template with itemized table, total, due date, and Customer Portal link
+  - [x] Safe local development fallback when `BREVO_API_KEY` is unset or simulated
+- [x] **Frontend User Interfaces**:
+  - [x] `InvoicesPage` (`/invoices`): Live database connection, status tabs, search, overdue toggle/badges, quick actions
+  - [x] "Run Billing Engine" Modal: As-of date selector, execution summary (processed, created, skipped, failed, total amount), itemized breakdown
+  - [x] Invoice Detail Modal: Itemized charges table with tax snapshots, delivery metadata, lifecycle action bar (confirm, cancel with reason, send via Brevo, print)
+  - [x] Browser Print Statement: CSS `@media print` formatting rendering clean, branded printable invoice statements
+  - [x] `SettingsPage` (`/settings`): Live Tax Rules tab with Admin CRUD modal and Staff view-only access
+  - [x] Customer Portal (`/portal`): Live "My Invoices & Receipts" with statement detail modal and printable receipts
+- [x] **TypeScript Build**:
+  - [x] Production build passes cleanly with zero errors (`npm run build`)
 
 ---
 

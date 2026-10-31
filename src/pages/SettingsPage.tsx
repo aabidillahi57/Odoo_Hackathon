@@ -1,18 +1,98 @@
 import React, { useState } from 'react';
-import { Settings, Shield, Mail, UserCheck, Plus, CheckCircle2, XCircle, ShieldAlert } from 'lucide-react';
+import { Settings, Shield, Mail, UserCheck, Plus, CheckCircle2, XCircle, ShieldAlert, Edit2, X } from 'lucide-react';
 import { PageHeader } from '../components/common/PageHeader';
 import { Button } from '../components/common/Button';
 import { Card } from '../components/common/Card';
 import { Badge } from '../components/common/Badge';
 import { ErrorAlert } from '../components/common/ErrorAlert';
+import { LoadingSpinner } from '../components/common/LoadingSpinner';
 import { useAuth } from '../context/AuthContext';
 import { evaluatePasswordPolicy } from '../utils/passwordPolicy';
+import { useTaxes, createTax, updateTax } from '../services/api';
+import { Tax } from '../types';
 
 export const SettingsPage: React.FC = () => {
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
 
   const [activeTab, setActiveTab] = useState<'general' | 'taxes' | 'staff' | 'email'>('general');
+
+  // Tax Rules state
+  const { taxes, isLoading: isLoadingTaxes, error: taxesError, refetch: refetchTaxes } = useTaxes();
+  const [showTaxModal, setShowTaxModal] = useState(false);
+  const [editingTax, setEditingTax] = useState<Tax | null>(null);
+  const [taxName, setTaxName] = useState('');
+  const [taxRate, setTaxRate] = useState('');
+  const [taxDescription, setTaxDescription] = useState('');
+  const [taxIsActive, setTaxIsActive] = useState(true);
+  const [isSavingTax, setIsSavingTax] = useState(false);
+  const [taxActionError, setTaxActionError] = useState<string | null>(null);
+  const [taxActionSuccess, setTaxActionSuccess] = useState<string | null>(null);
+
+  const openCreateTaxModal = () => {
+    setEditingTax(null);
+    setTaxName('');
+    setTaxRate('18.00');
+    setTaxDescription('');
+    setTaxIsActive(true);
+    setTaxActionError(null);
+    setShowTaxModal(true);
+  };
+
+  const openEditTaxModal = (tax: Tax) => {
+    setEditingTax(tax);
+    setTaxName(tax.name);
+    setTaxRate(tax.ratePercentage.toString());
+    setTaxDescription(tax.description || '');
+    setTaxIsActive(tax.isActive);
+    setTaxActionError(null);
+    setShowTaxModal(true);
+  };
+
+  const handleSaveTax = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setTaxActionError(null);
+    setTaxActionSuccess(null);
+
+    const name = taxName.trim();
+    if (!name) {
+      setTaxActionError('Tax rule name is required.');
+      return;
+    }
+
+    const rate = parseFloat(taxRate);
+    if (isNaN(rate) || rate < 0 || rate > 100) {
+      setTaxActionError('Tax rate percentage must be a number between 0.00% and 100.00%.');
+      return;
+    }
+
+    setIsSavingTax(true);
+    try {
+      if (editingTax) {
+        await updateTax(editingTax.id, {
+          name,
+          ratePercentage: rate,
+          description: taxDescription.trim() || undefined,
+          isActive: taxIsActive,
+        });
+        setTaxActionSuccess(`Tax rule "${name}" updated successfully.`);
+      } else {
+        await createTax({
+          name,
+          ratePercentage: rate,
+          description: taxDescription.trim() || undefined,
+          isActive: taxIsActive,
+        });
+        setTaxActionSuccess(`Tax rule "${name}" created successfully.`);
+      }
+      setShowTaxModal(false);
+      refetchTaxes();
+    } catch (err: any) {
+      setTaxActionError(err.message || 'Failed to save tax rule.');
+    } finally {
+      setIsSavingTax(false);
+    }
+  };
 
   // Staff creation form state
   const [showStaffForm, setShowStaffForm] = useState(false);
@@ -156,55 +236,85 @@ export const SettingsPage: React.FC = () => {
 
       {/* Tab 2: Taxes */}
       {activeTab === 'taxes' && (
-        <Card
-          title="Tax Rates"
-          description="Admin-configured percentage rates automatically added to subscription invoice line items."
-          action={
-            <Button
-              variant="primary"
-              size="sm"
-              icon={<Plus className="w-3.5 h-3.5" />}
-              onClick={() => alert('Add Tax Rate Modal (Phase 5)')}
-            >
-              Add Tax Rate
-            </Button>
-          }
-        >
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead>
-                <tr className="border-b border-slate-200 text-slate-400 font-semibold uppercase">
-                  <th className="py-2.5">Tax Name</th>
-                  <th className="py-2.5">Rate (%)</th>
-                  <th className="py-2.5">Status</th>
-                  <th className="py-2.5 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                <tr>
-                  <td className="py-3 font-semibold text-slate-800">GST Standard</td>
-                  <td className="py-3 font-mono font-medium text-slate-900">18.00%</td>
-                  <td className="py-3">
-                    <Badge variant="success" size="sm">Active</Badge>
-                  </td>
-                  <td className="py-3 text-right">
-                    <Button variant="ghost" size="sm">Edit</Button>
-                  </td>
-                </tr>
-                <tr>
-                  <td className="py-3 font-semibold text-slate-800">Zero-Rated Export</td>
-                  <td className="py-3 font-mono font-medium text-slate-900">0.00%</td>
-                  <td className="py-3">
-                    <Badge variant="neutral" size="sm">Active</Badge>
-                  </td>
-                  <td className="py-3 text-right">
-                    <Button variant="ghost" size="sm">Edit</Button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </Card>
+        <div className="space-y-4">
+          {taxActionSuccess && (
+            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-emerald-800 text-xs flex items-center justify-between">
+              <span>{taxActionSuccess}</span>
+              <button onClick={() => setTaxActionSuccess(null)} className="text-emerald-600 hover:text-emerald-800 font-bold ml-2">×</button>
+            </div>
+          )}
+
+          {taxesError && <ErrorAlert message={taxesError} />}
+
+          <Card
+            title="Tax Rules & Rates"
+            description="Configured percentage rates applied to pre-tax prices on recurring subscriptions and invoices. Rates are snapshotted on issuance."
+            action={
+              isAdmin ? (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  icon={<Plus className="w-3.5 h-3.5" />}
+                  onClick={openCreateTaxModal}
+                >
+                  Add Tax Rule
+                </Button>
+              ) : (
+                <Badge variant="neutral">Staff View-Only</Badge>
+              )
+            }
+          >
+            {isLoadingTaxes ? (
+              <div className="py-8 text-center">
+                <LoadingSpinner label="Loading tax rules..." />
+              </div>
+            ) : taxes && taxes.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-slate-400 font-semibold uppercase tracking-wider">
+                      <th className="py-2.5">Tax Name</th>
+                      <th className="py-2.5">Rate (%)</th>
+                      <th className="py-2.5">Description</th>
+                      <th className="py-2.5">Status</th>
+                      {isAdmin && <th className="py-2.5 text-right">Actions</th>}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {taxes.map((tax) => (
+                      <tr key={tax.id} className="hover:bg-slate-50/50">
+                        <td className="py-3 font-semibold text-slate-800">{tax.name}</td>
+                        <td className="py-3 font-mono font-medium text-slate-900">{tax.ratePercentage.toFixed(2)}%</td>
+                        <td className="py-3 text-slate-500">{tax.description || '—'}</td>
+                        <td className="py-3">
+                          <Badge variant={tax.isActive ? 'success' : 'neutral'} size="sm">
+                            {tax.isActive ? 'Active' : 'Inactive'}
+                          </Badge>
+                        </td>
+                        {isAdmin && (
+                          <td className="py-3 text-right">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              icon={<Edit2 className="w-3 h-3" />}
+                              onClick={() => openEditTaxModal(tax)}
+                            >
+                              Edit
+                            </Button>
+                          </td>
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="p-6 text-center text-slate-500 text-xs">
+                No tax rules configured yet.
+              </div>
+            )}
+          </Card>
+        </div>
       )}
 
       {/* Tab 3: Staff Accounts */}
@@ -365,6 +475,105 @@ export const SettingsPage: React.FC = () => {
             </div>
           </div>
         </Card>
+      )}
+
+      {/* Tax Rule Create / Edit Modal (Admin Only) */}
+      {showTaxModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-xl max-w-md w-full p-6 space-y-4 border border-slate-200 animate-in fade-in zoom-in-95 text-xs">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="text-sm font-bold text-slate-900">
+                {editingTax ? `Edit Tax Rule: ${editingTax.name}` : 'Create New Tax Rule'}
+              </h3>
+              <button
+                onClick={() => setShowTaxModal(false)}
+                className="text-slate-400 hover:text-slate-600 p-1"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {taxActionError && <ErrorAlert message={taxActionError} onDismiss={() => setTaxActionError(null)} />}
+
+            <form onSubmit={handleSaveTax} className="space-y-4">
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">
+                  Tax Name <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. GST Standard, VAT Standard, Sales Tax"
+                  value={taxName}
+                  onChange={(e) => setTaxName(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:bg-white text-slate-900"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">
+                  Rate Percentage (%) <span className="text-rose-500">*</span>
+                </label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    max="100"
+                    required
+                    placeholder="18.00"
+                    value={taxRate}
+                    onChange={(e) => setTaxRate(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:bg-white text-slate-900 pr-8"
+                  />
+                  <span className="absolute right-3 top-2 text-slate-400 font-bold">%</span>
+                </div>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Applied to pre-tax unit prices during billing runs.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">Description (Optional)</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Applicable to domestic SaaS transactions"
+                  value={taxDescription}
+                  onChange={(e) => setTaxDescription(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg focus:bg-white text-slate-900"
+                />
+              </div>
+
+              <div className="flex items-center gap-2 pt-1">
+                <input
+                  type="checkbox"
+                  id="tax-active-checkbox"
+                  checked={taxIsActive}
+                  onChange={(e) => setTaxIsActive(e.target.checked)}
+                  className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                />
+                <label htmlFor="tax-active-checkbox" className="font-semibold text-slate-700 cursor-pointer">
+                  Tax rule is active and available for billing
+                </label>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  type="button"
+                  onClick={() => setShowTaxModal(false)}
+                  disabled={isSavingTax}
+                >
+                  Cancel
+                </Button>
+                <Button variant="primary" size="sm" type="submit" isLoading={isSavingTax}>
+                  {editingTax ? 'Update Tax Rule' : 'Create Tax Rule'}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
     </div>
   );
